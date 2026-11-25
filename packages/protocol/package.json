@@ -1,0 +1,61 @@
+{
+  "name": "@petbot/protocol",
+  "version": "1.0.0",
+  "description": "Zero-copy binary and MsgPack wire protocol specifications for the Pet Robot ecosystem",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./constants": {
+      "types": "./dist/constants.d.ts",
+      "import": "./dist/constants.js",
+      "default": "./dist/constants.js"
+    },
+    "./codec": {
+      "types": "./dist/codec.d.ts",
+      "import": "./dist/codec.js",
+      "default": "./dist/codec.js"
+    },
+    "./frame-types": {
+      "types": "./dist/frame-types.d.ts",
+      "import": "./dist/frame-types.js",
+      "default": "./dist/frame-types.js"
+    },
+    "./ble-gatt": {
+      "types": "./dist/ble-gatt.d.ts",
+      "import": "./dist/ble-gatt.js",
+      "default": "./dist/ble-gatt.js"
+    },
+    "./stream-parser": {
+      "types": "./dist/stream-parser.d.ts",
+      "import": "./dist/stream-parser.js",
+      "default": "./dist/stream-parser.js"
+    },
+    "./binary": {
+      "types": "./dist/binary.d.ts",
+      "import": "./dist/binary.js",
+      "default": "./dist/binary.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc --noEmit --project tsconfig.json",
+    "codegen:headers": "tsx src/codegen-c.ts",
+    "clean": "node -e \"const fs = require('node:fs'); fs.rmSync('dist', { recursive: true, force: true });\""
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.0.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.6"
+  }
+}

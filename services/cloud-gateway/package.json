@@ -1,0 +1,42 @@
+{
+  "name": "@petbot/cloud-gateway",
+  "version": "1.0.0",
+  "description": "Cloud edge ingestion gateway for multi-device fleet telemetry, cloud LLM relay, audio dispatch, and EdDSA/JWT subscription entitlements",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "lint": "tsc --noEmit --project tsconfig.json",
+    "codegen:headers": "node -e \"process.exit(0)\"",
+    "clean": "node -e \"const fs = require('node:fs'); fs.rmSync('dist', { recursive: true, force: true });\""
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@fastify/websocket": "^11.0.2",
+    "@petbot/protocol": "workspace:*",
+    "@petbot/widget-schema": "workspace:*",
+    "fastify": "^5.2.1",
+    "jose": "^6.0.8",
+    "pino": "^10.4.0",
+    "ws": "^8.23.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}

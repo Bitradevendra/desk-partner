@@ -1,0 +1,52 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "codegen:headers": {
+      "cache": true,
+      "inputs": [
+        "src/**",
+        "include/**",
+        "scripts/**"
+      ],
+      "outputs": [
+        "include/**"
+      ]
+    },
+    "build": {
+      "dependsOn": [
+        "^codegen:headers",
+        "codegen:headers",
+        "^build"
+      ],
+      "inputs": [
+        "src/**",
+        "tsconfig.json",
+        "package.json"
+      ],
+      "outputs": [
+        "dist/**"
+      ]
+    },
+    "test": {
+      "dependsOn": [
+        "build"
+      ],
+      "inputs": [
+        "src/**",
+        "test/**",
+        "vitest.config.ts"
+      ],
+      "outputs": []
+    },
+    "lint": {
+      "inputs": [
+        "src/**",
+        "test/**"
+      ],
+      "outputs": []
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

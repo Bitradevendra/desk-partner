@@ -1,0 +1,11 @@
+{
+  "appId": "com.petbot.companion",
+  "appName": "Lobo Companion",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "PetBotMobileHarness": {}
+  }
+}

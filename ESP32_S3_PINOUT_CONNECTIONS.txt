@@ -1,0 +1,296 @@
+================================================================================
+ESP32-S3 N16R8 HARDWARE WIRING & PINOUT GUIDE - DESKTOP PET ROBOT
+================================================================================
+Target MCU  : ESP32-S3-WROOM-1 / ESP32-S3-DevKitC-1 N16R8
+Memory Specs: 16MB Quad SPI Flash, 8MB Octal PSRAM
+Source Ref  : firmware/include/hal/board_pins.h & hal/touch_hal.h
+Includes    : 5V Booster Power Architecture & Tri-Touch Sensor Configuration
+================================================================================
+
+================================================================================
+1. POWER RAILS & 5V BOOSTER DISTRIBUTION
+================================================================================
+If using a 5V Step-Up / Booster Module (e.g. MT3608, SX1308, TP4056+Booster):
+
+[ CONNECT TO 5V BOOSTER OUTPUT (STABLE 5V) ]
+- MAX98357A Audio Amp  (VIN)      -> Gives maximum 3.2W loud, crystal clear audio
+- ESP32-S3 DevKit      (5V / VIN) -> Powers onboard 3.3V LDO for core & Octal PSRAM
+- ST7735 1.8" TFT      (VCC)      -> Onboard LDO powers backlight; relieves 3.3V rail
+- MicroSD SPI Module   (VCC)      -> For modules with onboard AMS1117-3.3 regulator
+
+[ STRICTLY 3.3V ONLY - CONNECT TO ESP32-S3 3.3V OUT (NEVER CONNECT TO 5V!) ]
+- INMP441 MEMS Mic     (VDD)      -> 3.3V ONLY! (5V will permanently burn MEMS mic)
+- Left Touch (TTP223)  (VCC)      -> 3.3V ONLY! (5V causes 5V IO OUT which kills GPIO 1)
+- Right Touch (TTP223) (VCC)      -> 3.3V ONLY! (5V causes 5V IO OUT which kills GPIO 2)
+- Side Touch (TTP223)  (VCC)      -> 3.3V ONLY! (5V causes 5V IO OUT which kills GPIO 3)
+
+[ SYSTEM COMMON GROUND ]
+All GND terminals (Booster GND, Battery GND, ESP32-S3 GND, and all modules) 
+MUST be tied together into one common ground bus to prevent buzzing and ground loops.
+================================================================================
+
+================================================================================
+2. MASTER PINOUT TABLE
+================================================================================
+Peripheral Module      Module Pin       ESP32-S3 Pin   Voltage   Protocol / Notes
+--------------------------------------------------------------------------------
+ST7735 1.8" TFT        VCC              5V or 3.3V     5V / 3.3V Display Power (5V ok via LDO)
+(128x160 RGB565)       GND              GND            0V        System Common Ground
+                       SCL / SCK        GPIO 12        3.3V      SPI Clock (SCLK)
+                       SDA / MOSI       GPIO 11        3.3V      SPI Master-Out-Slave-In
+                       RES / RST        GPIO 14        3.3V      Display Hardware Reset
+                       DC / A0          GPIO 9         3.3V      Data / Command Select
+                       CS               GPIO 10        3.3V      SPI Chip Select
+                       BLK / LED        GPIO 21        3.3V      LEDC 5kHz PWM Backlight
+--------------------------------------------------------------------------------
+INMP441 MEMS Mic       VDD              3.3V           3.3V      CRITICAL: 3.3V ONLY (NOT 5V)
+(I2S Voice Input)      GND              GND            0V        System Common Ground
+                       L/R              GND            0V        Tied to GND for Left Channel
+                       SCK / BCLK       GPIO 4         3.3V      I2S0 Bit Clock
+                       WS               GPIO 5         3.3V      I2S0 Word Select (LRCK)
+                       SD / DIN         GPIO 6         3.3V      I2S0 Serial Data In
+--------------------------------------------------------------------------------
+MAX98357A I2S Amp      VIN              5V Booster     5V        5V gives max 3.2W volume
+(3W Class-D Speaker)   GND              GND            0V        System Common Ground
+                       BCLK             GPIO 15        3.3V      I2S1 Bit Clock
+                       LRC / WS         GPIO 16        3.3V      I2S1 Word Select
+                       DIN              GPIO 7         3.3V      I2S1 Serial Data Out
+                       SD / SD_MODE     GPIO 17        3.3V      Shutdown / Channel Select
+                       GAIN             GND            0V        Tied to GND = 12dB Gain
+                       SPK+             Speaker [+]    Analog    To 4-8 Ohm 3W Speaker (+)
+                       SPK-             Speaker [-]    Analog    To 4-8 Ohm 3W Speaker (-)
+                                                                 WARNING: NEVER GROUND SPK-!
+--------------------------------------------------------------------------------
+Tri-Touch Sensors      Left VCC         3.3V           3.3V      CRITICAL: 3.3V ONLY
+(3x TTP223 / Copper)   Left GND         GND            0V        System Common Ground
+                       Left SIG / OUT   GPIO 1         3.3V      Left Ear (Wink / Reject 2FA)
+                       Right VCC        3.3V           3.3V      CRITICAL: 3.3V ONLY
+                       Right GND        GND            0V        System Common Ground
+                       Right SIG / OUT  GPIO 2         3.3V      Right Ear (Curious / Approve)
+                       Side VCC         3.3V           3.3V      CRITICAL: 3.3V ONLY
+                       Side GND         GND            0V        System Common Ground
+                       Side SIG / OUT   GPIO 3         3.3V      Right Flank (Details / PTT)
+--------------------------------------------------------------------------------
+MicroSD SPI Socket     VCC              5V or 3.3V     5V / 3.3V Check module regulator
+(Vault File Storage)   GND              GND            0V        System Common Ground
+                       CS               GPIO 38        3.3V      SD Dedicated Chip Select
+                       MOSI / DI        GPIO 39        3.3V      SD SPI Master-Out-Slave-In
+                       MISO / DO        GPIO 40        3.3V      SD SPI Master-In-Slave-Out
+                       SCK / CLK        GPIO 41        3.3V      SD SPI Clock
+================================================================================
+
+================================================================================
+3. SCHEMATIC & WIRING DIAGRAMS
+================================================================================
+
+[ 1. POWER ARCHITECTURE (5V BOOSTER + 3.3V LDO) ]
+-------------------------------------------------
+   [ Battery / USB In ]
+           │
+           ▼
+   ┌───────────────┐
+   │  5V BOOSTER   │
+   │  VIN+     GND ├───────────────────────┐
+   │  VOUT+ (5V)   │                       │
+   └───┬───────────┘                       │
+       │                                   │
+       ├───> MAX98357A Amp (VIN)           │
+       ├───> ESP32-S3 DevKit (5V/VIN) ─────┼─> [ ESP32-S3 Onboard 3.3V LDO ]
+       ├───> ST7735 TFT Screen (VCC)       │                    │
+       ├───> MicroSD Module (VCC)          │                    ├─> INMP441 Mic (VDD)
+       │                                   │                    ├─> Left Touch TTP223 (VCC)
+       ▼                                   ▼                    ├─> Right Touch TTP223 (VCC)
+ [ Stable 5V Rail ]                 [ COMMON GND BUS ]          └─> Side Touch TTP223 (VCC)
+                                                                  [ Safe 3.3V Rail ]
+
+
+[ 2. 1.8" ST7735 SPI TFT DISPLAY ]
+----------------------------------
+   ST7735 Module                   ESP32-S3 DevKit
+   +-------------------+          +-------------------+
+   | VCC               +--------->+ 5V Booster (or 3.3V)
+   | GND               +--------->+ GND               |
+   | SCL / SCK (Clock) +--------->+ GPIO 12           |
+   | SDA / MOSI (Data) +--------->+ GPIO 11           |
+   | RES / RST (Reset) +--------->+ GPIO 14           |
+   | DC / A0 (Command) +--------->+ GPIO 9            |
+   | CS (Chip Select)  +--------->+ GPIO 10           |
+   | BLK / LED (Light) +--------->+ GPIO 21 (LEDC PWM)|
+   +-------------------+          +-------------------+
+
+
+[ 3. INMP441 I2S MEMS MICROPHONE ]
+----------------------------------
+   INMP441 Module                  ESP32-S3 DevKit
+   +-------------------+          +-------------------+
+   | VDD               +--------->+ 3.3V (3.3V ONLY!) |
+   | GND               +--------->+ GND               |
+   | L/R               +--------->+ GND (Left Channel)|
+   | SCK (Bit Clock)   +--------->+ GPIO 4            |
+   | WS (Word Select)  +--------->+ GPIO 5            |
+   | SD (Serial Data)  +--------->+ GPIO 6            |
+   +-------------------+          +-------------------+
+
+
+[ 4. MAX98357A I2S CLASS-D AMPLIFIER ]
+--------------------------------------
+   MAX98357A Module                Connections
+   +-------------------+          +-------------------+
+   | VIN               +--------->+ 5V BOOSTER OUT    | (Maximum 3.2W volume)
+   | GND               +--------->+ COMMON GROUND     |
+   | BCLK (Bit Clock)  +--------->+ GPIO 15 (ESP32-S3)|
+   | LRC (Word Select) +--------->+ GPIO 16 (ESP32-S3)|
+   | DIN (Data In)     +--------->+ GPIO 7  (ESP32-S3)|
+   | SD_MODE (Shutdown)+--------->+ GPIO 17 (ESP32-S3)|
+   | GAIN              +--------->+ GND (12dB gain)   |
+   +-------------------+          +-------------------+
+             |
+             +--- SPK+ ---------> Speaker [+] (4 or 8 Ohm 3W Micro Speaker)
+             +--- SPK- ---------> Speaker [-] (DO NOT CONNECT TO GROUND!)
+
+
+[ 5. TRI-TOUCH CAPACITIVE SENSORS (HEAD EARS + BODY FLANK) ]
+------------------------------------------------------------
+   Left Sensor (Top-Left Ear)      ESP32-S3 DevKit
+   +-------------------+          +-------------------+
+   | VCC               +--------->+ 3.3V (3.3V ONLY!) |
+   | GND               +--------->+ GND               |
+   | I/O (Signal Out)  +--------->+ GPIO 1            | (Left Ear: Wink / Reject 2FA)
+   +-------------------+          +-------------------+
+
+   Right Sensor (Top-Right Ear)    ESP32-S3 DevKit
+   +-------------------+          +-------------------+
+   | VCC               +--------->+ 3.3V (3.3V ONLY!) |
+   | GND               +--------->+ GND               |
+   | I/O (Signal Out)  +--------->+ GPIO 2            | (Right Ear: Curious / Approve 2FA)
+   +-------------------+          +-------------------+
+
+   Side Sensor (Right Body Flank)  ESP32-S3 DevKit
+   +-------------------+          +-------------------+
+   | VCC               +--------->+ 3.3V (3.3V ONLY!) |
+   | GND               +--------->+ GND               |
+   | I/O (Signal Out)  +--------->+ GPIO 3            | (Right Flank: Details / PTT / Select)
+   +-------------------+          +-------------------+
+
+
+[ 6. MICROSD CARD SPI SOCKET ]
+------------------------------
+   MicroSD Module                  ESP32-S3 DevKit
+   +-------------------+          +-------------------+
+   | VCC               +--------->+ 5V Booster (or 3.3V)
+   | GND               +--------->+ GND               |
+   | CS                +--------->+ GPIO 38           |
+   | MOSI / DI         +--------->+ GPIO 39           |
+   | MISO / DO         +--------->+ GPIO 40           |
+   | SCK / CLK         +--------->+ GPIO 41           |
+   +-------------------+          +-------------------+
+
+================================================================================
+4. ERGONOMIC TRI-TOUCH GESTURE MATRIX (DESK COMPANION OPTIMIZED)
+================================================================================
+With 3 touch sensors (Top-Left Ear, Top-Right Ear, Right Side Flank), the robot's
+interactions are mapped based on natural human desk ergonomics, hand grip, and 
+the most repeated everyday productivity habits:
+
+- Grip / Thumb resting on Right Side Flank (GPIO 3): Natural walkie-talkie / PTT hold.
+- Top-Right Ear (GPIO 2): Forward / Action / 25-Min Deep Work Focus sprint.
+- Top-Left Ear (GPIO 1): Memory / Back / Voice Memo to SD Vault & Return Home.
+
+--------------------------------------------------------------------------------
+GESTURE                        PHYSICAL MOTION              ACTION ON ROBOT
+--------------------------------------------------------------------------------
+[ HIGH-FREQUENCY EVERYDAY INTERACTIONS ]
+SideLongPress (>=650ms)        Hold Right Flank (Thumb)     PUSH-TO-TALK AI VOICE STREAMING
+                                                            (Hold while speaking like walkie-talkie,
+                                                            release to let AI reply)
+RightLongPress (>=650ms)       Hold Right Ear (Top-R)       25-MIN DEEP WORK FOCUS / POMODORO
+                                                            (Instantly starts focus timer, sets
+                                                            Focused HUD face & triggers PC focus mode)
+LeftLongPress (>=650ms)        Hold Left Ear (Top-L)        QUICK VOICE MEMO TO SD VAULT
+                                                            (Instantly records audio thought to
+                                                            /sd/vault/memos/ without breaking flow)
+SideDoubleTap                  Double-tap Right Flank       QUICK AI BRIEFING / SMART ASSIST
+                                                            (Triggers daily briefing, or configurable
+                                                            in App to Media Play/Pause / Next Widget;
+                                                            no manual mute needed thanks to Wake-Word!)
+LeftDoubleTap                  Double-tap Left Ear          UNIVERSAL HOME BUTTON
+                                                            (Instantly returns to Pet Face home page
+                                                            from any deep widget or setting)
+RightDoubleTap                 Double-tap Right Ear         NEXT APP / CAROUSEL PAGE SWITCHER
+                                                            (Slides 200ms cubicOut to next widget)
+
+[ SINGLE TAPS & CASUAL DESK INTERACTIONS ]
+LeftTap                        Tap Left Ear (GPIO 1)        Wink left eye / Previous item / Reject 2FA
+RightTap                       Tap Right Ear (GPIO 2)       Curious tilt / Next item / Approve 2FA
+SideTap                        Tap Right Flank (GPIO 3)     Universal Action / Play-Pause / 2FA Details
+LeftPetting                    Rapid scratch Left Ear       Happy left ear purr
+RightPetting                   Rapid scratch Right Ear      Happy right ear purr
+SidePetting                    Rapid scratch Right Flank    Flank tickle purr
+
+[ TWO-SENSOR CHORDS & PINCHES ]
+DualTap                        Top-L + Top-R tap            Head Pat! Affection Boost + Purr <3
+DualLongPress (>=650ms)        Top-L + Top-R hold           AMBIENT NIGHT LIGHT / SLEEP DIMMER
+                                                            (Dims screen to 15% backlight & Sleepy face;
+                                                            hold again to wake to 100% Day Mode)
+RightPinchTap                  Top-R + Side-R pinch         Volume UP (+10%) / 2-Step Approval
+RightPinchLongPress            Top-R + Side-R hold          Tier-3 High-Security 2FA Confirmation
+CrossChordTap                  Top-L + Side-R tap           Volume DOWN (-10%)
+CrossChordLongPress            Top-L + Side-R hold          Quick Screen Capture snapshot to SD Card
+
+[ DIRECTIONAL SLIDING SWIPES ]
+SwipeLeftToRight               Slide Top-L -> Top-R         Next Page (200ms cubic slide right)
+SwipeRightToLeft               Slide Top-R -> Top-L         Previous Page (200ms cubic slide left)
+SwipeTopToSide                 Slide Top-R -> Side-R        Downward Scroll / Volume Down
+SwipeSideToTop                 Slide Side-R -> Top-R        Upward Scroll / Volume Up
+
+[ TRI-TOUCH COMBINATIONS (ALL 3 SENSORS) ]
+TripleTap                      Tap all 3 together           GLOBAL EMERGENCY STOP (E-STOP)!
+                                                            (Immediately halts active agent task)
+TripleLongPress                Hold all 3 for >= 650ms      System SoftAP Reset & Diagnostics
+FullBodyGrooming               Scratch head & flank         Ecstatic Grooming! (Stars & Purr)
+TripleRollClockwise            Top-L -> Top-R -> Side-R     Circular Carousel Spin Forward
+TripleRollCounterClockwise     Side-R -> Top-R -> Top-L     Circular Carousel Spin Backward
+
+[ SIDE SENSOR AS "SHIFT" / MODIFIER KEY ]
+Hold Side Flank + Tap Left     Thumb on Side, index on L    Step Backward / Undo
+Hold Side Flank + Tap Right    Thumb on Side, index on R    Step Forward / Redo / Fast Execute
+================================================================================
+
+================================================================================
+5. CRITICAL HARDWARE RULES & SAFETY PRECAUTIONS
+================================================================================
+1. STRICT OCTAL PSRAM RESTRICTION (GPIO 33 - 37):
+   The ESP32-S3 N16R8 has 8MB Octal PSRAM wired internally to GPIO 33, 34, 35, 
+   36, and 37. NEVER connect any external jumper wire to these pins, or the board 
+   will immediately kernel panic and fail to boot.
+
+2. SYSTEM COMMON GROUND:
+   All modules (TFT, Mic, Amp, Touch Sensors, MicroSD, Booster) MUST share a 
+   common ground connection with the ESP32-S3 GND pin.
+
+3. SPEAKER AMPLIFIER WARNING (BTL OUTPUT):
+   The MAX98357A uses Bridge-Tied Load (BTL) outputs. 
+   NEVER wire SPK- to GND! SPK+ and SPK- must go directly to the speaker's 
+   two dedicated terminals.
+
+4. MICROPHONE & TOUCH VOLTAGE:
+   The INMP441 MEMS mic and all 3x TTP223 capacitive touch sensors MUST be 
+   powered from 3.3V ONLY. If you power TTP223 from 5V, its output will send 
+   5V logic into GPIO 1, 2, and 3, permanently burning the ESP32-S3 pins!
+
+================================================================================
+6. ON-THE-FLY PIN REMAPPING (ZERO-RECOMPILE CLI)
+================================================================================
+If you wire any pin to a different GPIO on your breadboard or PCB, you do NOT 
+need to recompile the C++ firmware!
+
+Connect the ESP32-S3 to your PC over USB Serial (115200 baud) and run:
+    setpin list                 -> View current pin configuration
+    setpin <name> <gpio>        -> Remap pin and save to NVS flash
+    setpin reset                -> Restore factory default pinout
+
+Examples:
+    setpin touch_left 1         -> Remaps Left Ear Touch to GPIO 1
+    setpin touch_right 2        -> Remaps Right Ear Touch to GPIO 2
+    setpin touch_side 3         -> Remaps Side Flank Touch to GPIO 3
+================================================================================

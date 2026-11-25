@@ -1,0 +1,32 @@
+{
+  "name": "petbot-ecosystem-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "High-performance ESP32-S3 AI Desktop Pet Robot production monorepo",
+  "type": "module",
+  "packageManager": "pnpm@10.26.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "codegen:headers": "turbo run codegen:headers",
+    "build": "turbo run codegen:headers build",
+    "test": "turbo run test --concurrency=1",
+    "test:e2e": "pnpm --filter @petbot/e2e-tests test",
+    "dev:ecosystem": "tsx tools/dev-orchestrator.ts",
+    "hw:flash": "pnpm --filter @petbot/hardware-bridge hw:flash",
+    "hw:provision": "pnpm --filter @petbot/hardware-bridge hw:provision",
+    "hw:verify": "pnpm --filter @petbot/hardware-bridge hw:verify",
+    "start:partner": "concurrently \"pnpm --filter @petbot/cloud-gateway dev\" \"pnpm --filter @petbot/desktop-harness dev\" \"pnpm --filter @petbot/companion dev\"",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "concurrently": "^9.1.2",
+    "tsx": "^4.19.3",
+    "turbo": "^2.4.4",
+    "typescript": "^5.8.2"
+  }
+}

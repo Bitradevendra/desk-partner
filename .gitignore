@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build artifacts & compilers
+dist/
+build/
+.turbo/
+out/
+*.tsbuildinfo
+
+# PlatformIO & Embedded Toolchains
+.pio/
+.pio-core/
+.pioenvs/
+.piolibdeps/
+*.bin
+*.elf
+*.hex
+*.map
+*.o
+*.a
+*.d
+
+# Environment and secrets
+.env
+.env.*.local
+*.pem
+*.key
+*.jks
+*.keystore
+keystore.properties
+
+# IDE and System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Local temporary files
+.tmp/
+

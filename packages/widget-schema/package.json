@@ -1,0 +1,32 @@
+{
+  "name": "@petbot/widget-schema",
+  "version": "1.0.0",
+  "description": "Zod schemas and MessagePack serialization for ESP32-S3 Pet Robot UI widgets and eye renderer",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc --noEmit --project tsconfig.json",
+    "codegen:headers": "tsx src/codegen-c.ts",
+    "clean": "node -e \"const fs = require('node:fs'); fs.rmSync('dist', { recursive: true, force: true });\""
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.0.2",
+    "@petbot/protocol": "workspace:*",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}

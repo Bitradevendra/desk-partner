@@ -1,0 +1,52 @@
+{
+  "name": "@petbot/virtual-robot-emulator",
+  "version": "1.0.0",
+  "description": "Standalone Desktop Virtual Robot Hardware Emulator for the ESP32-S3 Pet Robot",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "petbot-emulator": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./hardware": {
+      "types": "./dist/virtual-hardware.d.ts",
+      "import": "./dist/virtual-hardware.js",
+      "default": "./dist/virtual-hardware.js"
+    },
+    "./server": {
+      "types": "./dist/emulator-server.d.ts",
+      "import": "./dist/emulator-server.js",
+      "default": "./dist/emulator-server.js"
+    }
+  },
+  "scripts": {
+    "dev": "tsx watch src/cli.ts",
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "lint": "tsc --noEmit --project tsconfig.json",
+    "codegen:headers": "node -e \"process.exit(0)\"",
+    "clean": "node -e \"const fs = require('node:fs'); fs.rmSync('dist', { recursive: true, force: true });\""
+  },
+  "dependencies": {
+    "@petbot/protocol": "workspace:*",
+    "@petbot/widget-schema": "workspace:*",
+    "bonjour-service": "^1.4.4",
+    "pino": "^10.4.0",
+    "ws": "^8.23.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}

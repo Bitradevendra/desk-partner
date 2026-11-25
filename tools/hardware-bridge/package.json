@@ -1,0 +1,53 @@
+{
+  "name": "@petbot/hardware-bridge",
+  "version": "1.0.0",
+  "description": "Physical ESP32-S3 Hardware Flasher, Serial Provisioner & Live Hardware Diagnostic Suite",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "petbot-hw": "./dist/provision-physical-robot.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./serial": {
+      "types": "./dist/serial-detector.d.ts",
+      "import": "./dist/serial-detector.js",
+      "default": "./dist/serial-detector.js"
+    },
+    "./verifier": {
+      "types": "./dist/hardware-verifier.d.ts",
+      "import": "./dist/hardware-verifier.js",
+      "default": "./dist/hardware-verifier.js"
+    }
+  },
+  "scripts": {
+    "hw:flash": "tsx src/provision-physical-robot.ts --action flash",
+    "hw:provision": "tsx src/provision-physical-robot.ts --action provision",
+    "hw:verify": "tsx src/provision-physical-robot.ts --action verify",
+    "hw:all": "tsx src/provision-physical-robot.ts --action all",
+    "build": "tsc",
+    "test": "vitest run",
+    "lint": "tsc --noEmit --project tsconfig.json",
+    "codegen:headers": "node -e \"process.exit(0)\"",
+    "clean": "node -e \"const fs = require('node:fs'); fs.rmSync('dist', { recursive: true, force: true });\""
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.1.2",
+    "@petbot/protocol": "workspace:*",
+    "@petbot/widget-schema": "workspace:*",
+    "pino": "^10.4.0",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}
