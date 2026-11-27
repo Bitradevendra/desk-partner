@@ -193,7 +193,7 @@ bool AgenticTransport::initBle() {
     // Initialize NimBLE Device
     NimBLEDevice::init(m_config.bleDeviceName);
     NimBLEDevice::setPower(ESP_PWR_LVL_P9); // Maximum transmit power for sub-50ms discovery
-    NimBLEDevice::setMTU(256);
+    NimBLEDevice::setMTU(512);
 
     m_bleServer = NimBLEDevice::createServer();
     m_bleServer->setCallbacks(new BleServerCallbacks(this));
@@ -400,7 +400,9 @@ void AgenticTransport::connectWifi(const char* ssid, const char* password) {
     }
 
     Serial.printf("[Transport] Connecting Wi-Fi to SSID: %s\n", ssid);
-    WiFi.disconnect();
+    WiFi.persistent(false);
+    WiFi.setAutoReconnect(true);
+    WiFi.disconnect(false);
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password != nullptr ? password : "");
 }
@@ -598,12 +600,14 @@ void AgenticTransport::checkWifiStatus() {
             // Refresh BLE beacon with real LAN IPv4
             updateBleBeacon();
 
-            // Notify BLE client of immediate LAN IP for <50ms WebSocket upgrade
-            char statusJson[128];
-            std::snprintf(statusJson, sizeof(statusJson),
-                          "{\"status\":\"connected\",\"ip\":\"%s\",\"port\":%u,\"mode\":%u}",
-                          ip.toString().c_str(), m_config.wsPort, static_cast<uint8_t>(m_currentMode));
-            notifyBleTxStatus(statusJson);
+            // Notify BLE beacon characteristic only when no active binary stream is attached
+            if (!m_bleClientConnected) {
+                char statusJson[128];
+                std::snprintf(statusJson, sizeof(statusJson),
+                              "{\"status\":\"connected\",\"ip\":\"%s\",\"port\":%u,\"mode\":%u}",
+                              ip.toString().c_str(), m_config.wsPort, static_cast<uint8_t>(m_currentMode));
+                notifyBleTxStatus(statusJson);
+            }
         } else {
             Serial.println("[Transport] Wi-Fi Disconnected!");
             updateBleBeacon();

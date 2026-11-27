@@ -70,6 +70,10 @@ public:
     void toggleVoiceStream();
 
     [[nodiscard]] bool isVoiceStreaming() const noexcept { return m_uplinkActive; }
+    [[nodiscard]] bool isThinking() const noexcept { return m_isThinking; }
+    [[nodiscard]] bool wasSpeaking() const noexcept { return m_wasSpeaking; }
+    [[nodiscard]] uint32_t getEchoBlankUntilMs() const noexcept { return m_echoBlankUntilMs; }
+    [[nodiscard]] uint32_t getUpdateTicks() const noexcept { return m_updateTicks; }
     [[nodiscard]] bool isVoiceAiSubscribed() const noexcept;
     [[nodiscard]] const SubscriptionEntitlement& getSubscription() const noexcept { return m_subscription; }
 
@@ -133,6 +137,9 @@ private:
     uint32_t m_listenStartMs{0};
     uint32_t m_lastUplinkMs{0};
     uint32_t m_vadHangoverEndMs{0};
+    uint32_t m_echoBlankUntilMs{0};
+    uint32_t m_thinkingStartMs{0};
+    bool m_isThinking{false};
     bool m_wasSpeaking{false};
 
     // Upsell Prompt State
@@ -155,7 +162,13 @@ private:
     char m_wakeWordPhrase[32]{"Hi ESP"};
     bool m_wakeNetInitialized{false};
     uint32_t m_lastWakeTriggerMs{0};
+    uint32_t m_wakeWindowStartMs{0};
     uint16_t m_wakeConsecutiveHits{0};
+    uint32_t m_updateTicks{0};
+    // Preallocated scratch buffers (keeps FreeRTOS task stack small and fragmentation zero)
+    int16_t m_micSamples[UPLINK_FRAME_SAMPLES]{};
+    uint8_t m_uplinkTxBuffer[sizeof(AudioUplinkHeader) + UPLINK_FRAME_BYTES]{};
+
     bool initWakeNet();
     void destroyWakeNet();
 };

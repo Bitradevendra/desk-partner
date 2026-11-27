@@ -36,6 +36,7 @@
 #include "ui/ui_manager.h"
 #include "ui/expression_engine.h"
 #include "audio/sound_manager.h"
+#include "audio/aha_wav.h"
 
 using namespace petbot::protocol::constants;
 using namespace petbot::protocol;
@@ -279,6 +280,9 @@ void executeCliCommand(const char* cmd) {
         Serial.printf("  Free PSRAM    : %u bytes\n", static_cast<unsigned int>(freePsram));
         Serial.printf("  MicroSD Card  : %s\n", StorageHal::instance().isSdMounted() ? "MOUNTED (/sd)" : "NOT MOUNTED");
         Serial.printf("  LittleFS Flash: %s\n", StorageHal::instance().isLittleFsMounted() ? "MOUNTED (/flash)" : "NOT MOUNTED");
+        Serial.printf("  Wi-Fi         : %s (IP: %s)\n",
+                      AgenticTransport::instance().isWifiConnected() ? "CONNECTED" : "CONNECTING/IDLE",
+                      AgenticTransport::instance().getLocalIp().toString().c_str());
         Serial.println("----------------------------\n");
     } else if (strcmp(cmd, "tap") == 0) {
         TouchGestureEvent evt{TouchGesture::SingleTap, millis(), 100, 1};
@@ -382,6 +386,30 @@ void executeCliCommand(const char* cmd) {
         VoiceStreamer::instance().toggleVoiceStream();
         Serial.printf("[CLI] Voice streaming toggled. Active: %s\n",
                       VoiceStreamer::instance().isVoiceStreaming() ? "YES" : "NO");
+    } else if (strcmp(cmd, "mic") == 0 || strcmp(cmd, "spk") == 0) {
+        if (strcmp(cmd, "spk") == 0) {
+            AudioHal::instance().setSpeakerMute(false);
+            AudioHal::instance().playProceduralSound(petbot::hal::SoundId::AhaVoice);
+            Serial.println("[SPK] Triggered SoundId::AhaVoice speaker test.");
+        }
+        Serial.printf(
+            "[MIC] ok=%lu fail=%lu rms=%u floor=%u thr=%u spkFrames=%lu spkErr=%lu sd=%d muted=%s playing=%s ahaBytes=%u uplink=%s speak=%s think=%s ticks=%lu\n",
+            static_cast<unsigned long>(AudioHal::instance().getMicFramesOk()),
+            static_cast<unsigned long>(AudioHal::instance().getMicFramesFail()),
+            AudioHal::instance().getLastMicRms(),
+            AudioHal::instance().getNoiseFloorRms(),
+            AudioHal::instance().getVadThreshold(),
+            static_cast<unsigned long>(AudioHal::instance().getSpkFramesWritten()),
+            static_cast<unsigned long>(AudioHal::instance().getSpkI2sErrors()),
+            (petbot::firmware::hal::PIN_SPK_SD_MODE >= 0) ? gpio_get_level(static_cast<gpio_num_t>(petbot::firmware::hal::PIN_SPK_SD_MODE)) : -1,
+            AudioHal::instance().isSpeakerMuted() ? "YES" : "NO",
+            AudioHal::instance().isPlaying() ? "YES" : "NO",
+            static_cast<unsigned int>(StorageHal::instance().getFileSize("/flash/aha.wav")),
+            VoiceStreamer::instance().isVoiceStreaming() ? "YES" : "NO",
+            VoiceStreamer::instance().wasSpeaking() ? "YES" : "NO",
+            VoiceStreamer::instance().isThinking() ? "YES" : "NO",
+            static_cast<unsigned long>(VoiceStreamer::instance().getUpdateTicks())
+        );
     } else if (strcmp(cmd, "home") == 0) {
         UIManager::instance().navigateToPage("home");
         AudioHal::instance().playProceduralSound(petbot::hal::SoundId::Chirp);
@@ -409,6 +437,20 @@ void executeCliCommand(const char* cmd) {
         AudioHal::instance().setSpeakerMute(muted);
         UIManager::instance().showToast(muted ? "Privacy: MUTED" : "Audio: UNMUTED", 2000);
         Serial.printf("[CLI] Audio mute toggled. Muted: %s\n", muted ? "YES" : "NO");
+    } else if (strcmp(cmd, "wifi") == 0) {
+        Serial.printf("[Wi-Fi] Connected=%s IP=%s\n",
+                      AgenticTransport::instance().isWifiConnected() ? "YES" : "NO",
+                      AgenticTransport::instance().getLocalIp().toString().c_str());
+    } else if (strcmp(cmd, "wifi reset") == 0) {
+#ifdef ESP32
+        Preferences provPrefs;
+        if (provPrefs.begin("petbot_prov", false)) {
+            provPrefs.clear();
+            provPrefs.end();
+        }
+#endif
+        AgenticTransport::instance().connectWifi(config::DEFAULT_WIFI_SSID, config::DEFAULT_WIFI_PASS);
+        Serial.printf("[CLI] Cleared saved Wi-Fi; connecting to default SSID '%s'.\n", config::DEFAULT_WIFI_SSID);
     } else if (strncmp(cmd, "wifi ", 5) == 0) {
         char ssid[33]{0};
         char pass[65]{0};
@@ -794,6 +836,16 @@ void setup() {
     // 2. Initialize StorageHal (SD Card with LittleFS fallback) and load persisted RTC/Notes/Habits state
     StorageHal::instance().init();
     StorageHal::instance().ensureStandardDirectories();
+    if (StorageHal::instance().getFileSize("/flash/aha.wav") != petbot::hal::assets::AHA_WAV_SIZE) {
+        if (StorageHal::instance().writeFileAtomic(
+                "/flash/aha.wav",
+                petbot::hal::assets::AHA_WAV_DATA,
+                petbot::hal::assets::AHA_WAV_SIZE,
+                false)) {
+            Serial.printf("[AudioAsset] Saved /flash/aha.wav (%u bytes, 16kHz 16-bit PCM).\n",
+                          static_cast<unsigned int>(petbot::hal::assets::AHA_WAV_SIZE));
+        }
+    }
     Serial.println("[Storage] Initialized StorageHal (SD Card with LittleFS fallback) and ensured directories.");
 
     // 3. Initialize DisplayHal in 160x128 Horizontal Landscape (pins on LEFT), play crisp white wakeup animation
@@ -867,23 +919,35 @@ void setup() {
     OtaUpdater::instance().init();
     AgenticManager::instance().init(transportConfig);
 
-    // Auto-connect provisioned Wi-Fi and Desktop Harness from NVS namespace "petbot_prov"
+    // Auto-connect saved NVS Wi-Fi ("petbot_prov") or fall back to default Wi-Fi ("lobo" / "lobo1234")
 #ifdef ESP32
-    Preferences provPrefs;
-    if (provPrefs.begin("petbot_prov", true)) {
-        String savedSsid = provPrefs.getString("ssid", "");
-        String savedPass = provPrefs.getString("password", "");
-        String savedHost = provPrefs.getString("host", "");
-        uint16_t savedPort = provPrefs.getUShort("port", DEFAULT_WS_PORT);
-        provPrefs.end();
+    {
+        String targetSsid;
+        String targetPass;
+        String savedHost;
+        uint16_t savedPort = DEFAULT_WS_PORT;
 
-        if (savedSsid.length() > 0) {
-            Serial.printf("[Boot] Auto-connecting to provisioned Wi-Fi SSID '%s'...\n", savedSsid.c_str());
-            AgenticTransport::instance().connectWifi(savedSsid.c_str(), savedPass.c_str());
-            if (savedHost.length() > 0) {
-                Serial.printf("[Boot] Auto-connecting outbound to provisioned Desktop Harness ws://%s:%u/ws...\n", savedHost.c_str(), savedPort);
-                AgenticTransport::instance().connectOutbound(savedHost.c_str(), savedPort, "/ws");
-            }
+        Preferences provPrefs;
+        if (provPrefs.begin("petbot_prov", false)) {
+            targetSsid = provPrefs.getString("ssid", "");
+            targetPass = provPrefs.getString("password", "");
+            savedHost = provPrefs.getString("host", "");
+            savedPort = provPrefs.getUShort("port", DEFAULT_WS_PORT);
+            provPrefs.end();
+        }
+
+        if (targetSsid.length() == 0) {
+            targetSsid = config::DEFAULT_WIFI_SSID;
+            targetPass = config::DEFAULT_WIFI_PASS;
+            Serial.printf("[Boot] Auto-connecting to default Wi-Fi SSID '%s'...\n", targetSsid.c_str());
+        } else {
+            Serial.printf("[Boot] Auto-connecting to saved Wi-Fi SSID '%s'...\n", targetSsid.c_str());
+        }
+
+        AgenticTransport::instance().connectWifi(targetSsid.c_str(), targetPass.c_str());
+        if (savedHost.length() > 0 && savedHost != "petbot.local") {
+            Serial.printf("[Boot] Auto-connecting outbound to Desktop Harness ws://%s:%u/ws...\n", savedHost.c_str(), savedPort);
+            AgenticTransport::instance().connectOutbound(savedHost.c_str(), savedPort, "/ws");
         }
     }
 #endif
@@ -912,11 +976,11 @@ void setup() {
         1 // Core 1 (Interaction Core)
     );
 
-    // Task_StorageWorker (Priority 2, Core 0): Asynchronous Background Storage Writer
+    // Task_StorageWorker (Priority 2, Core 0): Asynchronous Background Storage & Voice Pipeline Writer
     xTaskCreatePinnedToCore(
         Task_StorageWorker,
         "Task_StorageWorker",
-        4096,
+        8192,
         nullptr,
         2,
         &s_storageWorkerTaskHandle,
@@ -936,8 +1000,7 @@ void loop() {
 
     const uint32_t now = millis();
 
-    // Direct loop update for Voice Streamer and Touch 2FA FSM
-    VoiceStreamer::instance().update(now);
+    // VoiceStreamer runs exclusively on Core 0 inside Task_StorageWorker; update Touch 2FA FSM on Core 1
     Touch2FAManager::instance().update(now);
 
     // Heartbeat log every 2000ms

@@ -472,4 +472,95 @@ describe("Native Mobile Partner Harness", () => {
       expect(resUnknown.error).toContain("Unknown mobile tool method");
     });
   });
+
+  describe("Gemini Free-Tier Model Auto-Fallback & Discovery", () => {
+    it("falls back through quota/deprecated models and discovers live free models", async () => {
+      const {
+        processTextWithGemini,
+        resetGeminiModelCacheForTest,
+        FREE_TIER_MODEL_PRIORITY,
+      } = await import("../src/services/gemini-voice-client.js");
+
+      resetGeminiModelCacheForTest();
+      expect(FREE_TIER_MODEL_PRIORITY[0]).toBe("gemini-3.5-flash-lite");
+
+      const originalFetch = globalThis.fetch;
+      const calledUrls: string[] = [];
+
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calledUrls.push(url);
+        if (url.includes("models?")) {
+          return new Response(
+            JSON.stringify({
+              models: [
+                {
+                  name: "models/gemini-4-nano-free",
+                  supportedGenerationMethods: ["generateContent"],
+                },
+                {
+                  name: "models/text-embedding-004",
+                  supportedGenerationMethods: ["embedContent"],
+                },
+                {
+                  name: "models/gemini-future-flash-lite",
+                  supportedGenerationMethods: ["generateContent"],
+                },
+              ],
+            }),
+            { status: 200 }
+          );
+        }
+        if (url.includes("gemini-future-flash-lite:generateContent")) {
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          transcript: "open youtube",
+                          spokenReply: "Opening YouTube.",
+                          emotion: "HAPPY",
+                          action: { type: "OPEN_APP", params: { appName: "YouTube" } },
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response("Quota exceeded", { status: 429 });
+      }) as typeof fetch;
+
+      try {
+        const res = await processTextWithGemini(
+          "open youtube",
+          { habits: [], widgets: ["Clock"], persona: "Nova" },
+          "test-key-123"
+        );
+        expect(res?.usedGemini).toBe(true);
+        expect(res?.modelUsed).toBe("gemini-future-flash-lite");
+        expect(res?.action.type).toBe("OPEN_APP");
+        expect(calledUrls.some((u) => u.includes("models?"))).toBe(true);
+
+        // Next call reuses sticky working model immediately in 1 call
+        const callsBeforeSecond = calledUrls.length;
+        const res2 = await processTextWithGemini(
+          "open youtube",
+          { habits: [], widgets: ["Clock"], persona: "Nova" },
+          "test-key-123"
+        );
+        expect(res2?.modelUsed).toBe("gemini-future-flash-lite");
+        expect(calledUrls.length - callsBeforeSecond).toBe(1);
+      } finally {
+        globalThis.fetch = originalFetch;
+        resetGeminiModelCacheForTest();
+      }
+    });
+  });
 });

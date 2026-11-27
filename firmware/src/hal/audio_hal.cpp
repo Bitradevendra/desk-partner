@@ -1,4 +1,5 @@
 #include "hal/audio_hal.h"
+#include "audio/aha_wav.h"
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -178,7 +179,7 @@ bool AudioHal::init() noexcept {
     const BaseType_t taskCreated = xTaskCreatePinnedToCore(
         audioEngineTask,
         "Task_AudioEngine",
-        4096,
+        6144,
         this,
         4, // Priority 4
         &audioTaskHandle_,
@@ -203,7 +204,8 @@ bool AudioHal::initSpeakerI2S() noexcept {
         .mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_TX),
         .sample_rate = AUDIO_SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
+        // Dual-slot stereo output ensures MAX98357A receives full audio whether SD_MODE selects L (3.3V), R, or (L+R)/2
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = static_cast<int>(I2S_DMA_BUF_COUNT),
@@ -221,17 +223,31 @@ bool AudioHal::initSpeakerI2S() noexcept {
         .data_in_num = I2S_PIN_NO_CHANGE
     };
 
-    if (i2s_driver_install(I2S_NUM_1, &i2sSpkConfig, 0, nullptr) != ESP_OK) {
+    const esp_err_t drvErr = i2s_driver_install(I2S_NUM_1, &i2sSpkConfig, 0, nullptr);
+    if (drvErr != ESP_OK) {
+        Serial.printf("[AudioHal] ERROR: i2s_driver_install(I2S_NUM_1) failed: 0x%x\n", drvErr);
         return false;
     }
-    if (i2s_set_pin(I2S_NUM_1, &pinSpkConfig) != ESP_OK) {
+    const esp_err_t pinErr = i2s_set_pin(I2S_NUM_1, &pinSpkConfig);
+    if (pinErr != ESP_OK) {
+        Serial.printf("[AudioHal] ERROR: i2s_set_pin(I2S_NUM_1) failed: 0x%x\n", pinErr);
         return false;
     }
+    i2s_zero_dma_buffer(I2S_NUM_1);
 
-    // Unmute speaker amplifier
-    gpio_set_direction(static_cast<gpio_num_t>(petbot::firmware::hal::PIN_SPK_SD_MODE), GPIO_MODE_OUTPUT);
-    gpio_set_level(static_cast<gpio_num_t>(petbot::firmware::hal::PIN_SPK_SD_MODE), 1);
+    // Reset & cleanly drive speaker SD_MODE HIGH (INPUT_OUTPUT allows pin readback verification)
+    if (petbot::firmware::hal::PIN_SPK_SD_MODE >= 0) {
+        const auto sdPin = static_cast<gpio_num_t>(petbot::firmware::hal::PIN_SPK_SD_MODE);
+        gpio_reset_pin(sdPin);
+        gpio_set_direction(sdPin, GPIO_MODE_INPUT_OUTPUT);
+        gpio_set_level(sdPin, 1);
+    }
     isMuted_ = false;
+    Serial.printf("[AudioHal] Speaker MAX98357A I2S Stereo Active (BCLK=%d, LRCK=%d, DOUT=%d, SD=%d)\n",
+                  petbot::firmware::hal::PIN_SPK_BCLK,
+                  petbot::firmware::hal::PIN_SPK_LRCK,
+                  petbot::firmware::hal::PIN_SPK_DOUT,
+                  petbot::firmware::hal::PIN_SPK_SD_MODE);
 #endif
     return true;
 }
@@ -299,30 +315,61 @@ bool AudioHal::readMicUplinkFrame(int16_t* outSamples, uint16_t& outRms, bool& o
     if (!outSamples) return false;
 
 #ifdef ESP32
-    int32_t raw32[AUDIO_FRAME_SAMPLES];
     size_t bytesRead = 0;
     const esp_err_t err = i2s_read(
         I2S_NUM_0,
-        raw32,
-        sizeof(raw32),
+        micRawBuffer_,
+        sizeof(micRawBuffer_),
         &bytesRead,
         pdMS_TO_TICKS(AUDIO_FRAME_MS * 2)
     );
 
-    if (err != ESP_OK || bytesRead < sizeof(raw32)) {
+    if (err != ESP_OK || bytesRead < sizeof(micRawBuffer_)) {
+        micFramesFail_++;
         return false;
     }
+    micFramesOk_++;
 
+    int64_t meanSum = 0;
+    for (size_t i = 0; i < AUDIO_FRAME_SAMPLES; ++i) {
+        // INMP441 24-bit I2S shifted cleanly into int16 range (in-place to save task stack)
+        const int32_t s = micRawBuffer_[i] >> 15;
+        micRawBuffer_[i] = s;
+        meanSum += s;
+    }
+
+    // Subtract frame DC offset so constant MEMS/electrical bias never triggers false VAD
+    const int32_t dcMean = static_cast<int32_t>(meanSum / static_cast<int64_t>(AUDIO_FRAME_SAMPLES));
     uint64_t sumSquares = 0;
     for (size_t i = 0; i < AUDIO_FRAME_SAMPLES; ++i) {
-        // INMP441 MSB 24-bit shifted into high 16 bits
-        const int16_t sample16 = static_cast<int16_t>(raw32[i] >> 14);
-        outSamples[i] = sample16;
-        sumSquares += static_cast<uint64_t>(sample16) * static_cast<uint64_t>(sample16);
+        const int32_t ac = std::clamp<int32_t>(micRawBuffer_[i] - dcMean, -32767, 32767);
+        const int16_t s16 = static_cast<int16_t>(ac);
+        outSamples[i] = s16;
+        sumSquares += static_cast<uint64_t>(ac * ac);
     }
 
     outRms = static_cast<uint16_t>(std::sqrt(sumSquares / AUDIO_FRAME_SAMPLES));
-    outVad = (outRms >= vadThreshold_);
+    lastMicRms_ = outRms;
+
+    // Adaptive ambient noise floor: rapid calibration on first ~2.5s (125 frames), slow track when quiet
+    if (micWarmupFrames_ < 125) {
+        noiseFloorRms_ = (micWarmupFrames_ == 0)
+            ? static_cast<float>(outRms)
+            : (noiseFloorRms_ * 0.85f + static_cast<float>(outRms) * 0.15f);
+        micWarmupFrames_++;
+        outVad = false;
+        return true;
+    }
+
+    if (static_cast<float>(outRms) < (noiseFloorRms_ * 2.2f + 250.0f)) {
+        noiseFloorRms_ = noiseFloorRms_ * 0.985f + static_cast<float>(outRms) * 0.015f;
+    }
+
+    const uint16_t dynamicThreshold = static_cast<uint16_t>(
+        std::min<float>(12000.0f, noiseFloorRms_ * 2.8f + 380.0f)
+    );
+    const uint16_t effectiveThreshold = std::max<uint16_t>(vadThreshold_, dynamicThreshold);
+    outVad = (outRms >= effectiveThreshold);
     return true;
 #else
     std::memset(outSamples, 0, AUDIO_FRAME_BYTES);
@@ -371,8 +418,6 @@ void AudioHal::audioEngineTask(void* param) noexcept {
 
 void AudioHal::runAudioEngine() noexcept {
 #ifdef ESP32
-    int16_t mixBuffer[AUDIO_FRAME_SAMPLES];
-
     while (true) {
         // Check for new procedural sound requests in queue
         SoundId queuedId;
@@ -382,7 +427,7 @@ void AudioHal::runAudioEngine() noexcept {
             soundTotalSamples_.store(getProceduralSoundLength(queuedId));
         }
 
-        std::memset(mixBuffer, 0, sizeof(mixBuffer));
+        std::memset(spkMixBuffer_, 0, sizeof(spkMixBuffer_));
 
         const SoundId currentSound = activeSound_.load();
         if (currentSound != SoundId::None) {
@@ -390,7 +435,7 @@ void AudioHal::runAudioEngine() noexcept {
             renderProceduralSamples(
                 currentSound,
                 soundSampleIndex_.load(),
-                mixBuffer,
+                spkMixBuffer_,
                 AUDIO_FRAME_SAMPLES,
                 finished
             );
@@ -401,20 +446,33 @@ void AudioHal::runAudioEngine() noexcept {
             }
         } else if (downlinkBuffer_.available() > 0) {
             // Mix downlink voice stream if no procedural sound active
-            downlinkBuffer_.read(mixBuffer, AUDIO_FRAME_SAMPLES);
+            downlinkBuffer_.read(spkMixBuffer_, AUDIO_FRAME_SAMPLES);
         }
 
-        // Apply full maximum speaker gain (1.5x clean boost on speech, clamped to int16)
+        // Apply full maximum speaker gain and mirror mono frame onto both Left & Right I2S slots
         const bool isVoiceDownlink = (currentSound == SoundId::None);
-        const float gain = isVoiceDownlink ? 1.5f : 1.0f;
+        const float gain = isVoiceDownlink ? 1.5f : 1.15f;
         for (size_t i = 0; i < AUDIO_FRAME_SAMPLES; ++i) {
-            const int32_t scaled = static_cast<int32_t>(static_cast<float>(mixBuffer[i]) * gain);
-            mixBuffer[i] = static_cast<int16_t>(std::clamp<int32_t>(scaled, -32767, 32767));
+            const int32_t scaled = static_cast<int32_t>(static_cast<float>(spkMixBuffer_[i]) * gain);
+            const int16_t s = static_cast<int16_t>(std::clamp<int32_t>(scaled, -32767, 32767));
+            spkStereoBuffer_[i * 2]     = s;
+            spkStereoBuffer_[i * 2 + 1] = s;
         }
 
-        // Push frame to I2S_NUM_1 DMA
+        // Push stereo frame to I2S_NUM_1 DMA
         size_t bytesWritten = 0;
-        i2s_write(I2S_NUM_1, mixBuffer, sizeof(mixBuffer), &bytesWritten, portMAX_DELAY);
+        const esp_err_t writeErr = i2s_write(
+            I2S_NUM_1,
+            spkStereoBuffer_,
+            sizeof(spkStereoBuffer_),
+            &bytesWritten,
+            portMAX_DELAY
+        );
+        if (writeErr == ESP_OK && bytesWritten > 0) {
+            spkFramesWritten_++;
+        } else {
+            spkI2sErrors_++;
+        }
     }
 #endif
 }
@@ -435,6 +493,8 @@ size_t AudioHal::getProceduralSoundLength(SoundId id) noexcept {
             return 128;  // 8ms @ 16kHz
         case SoundId::AlarmChime:
             return 9600; // 600ms @ 16kHz
+        case SoundId::AhaVoice:
+            return petbot::hal::assets::AHA_PCM_SAMPLE_COUNT; // Pre-recorded 16kHz PCM WAV saved in ESP32 flash
         default:
             return 0;
     }
@@ -455,6 +515,22 @@ void AudioHal::renderProceduralSamples(
     }
 
     outFinished = false;
+
+    if (id == SoundId::AhaVoice) {
+        for (size_t i = 0; i < sampleCount; ++i) {
+            const size_t globalSample = sampleOffset + i;
+            if (globalSample >= totalSamples) {
+                outFinished = true;
+                outBuffer[i] = 0;
+                continue;
+            }
+            const size_t byteIdx = petbot::hal::assets::AHA_WAV_HEADER_BYTES + (globalSample * 2);
+            const uint16_t raw = static_cast<uint16_t>(petbot::hal::assets::AHA_WAV_DATA[byteIdx]) |
+                                 (static_cast<uint16_t>(petbot::hal::assets::AHA_WAV_DATA[byteIdx + 1]) << 8);
+            outBuffer[i] = static_cast<int16_t>(raw);
+        }
+        return;
+    }
 
     for (size_t i = 0; i < sampleCount; ++i) {
         const size_t globalSample = sampleOffset + i;

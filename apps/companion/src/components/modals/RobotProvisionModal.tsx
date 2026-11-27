@@ -29,6 +29,7 @@ export const RobotProvisionModal: React.FC = () => {
   const [showPass, setShowPass] = useState(false);
   const [harnessHost, setHarnessHost] = useState(wifiProvisionConfig.harnessHost);
   const [harnessPort, setHarnessPort] = useState(String(wifiProvisionConfig.harnessPort));
+  const [showAdvancedHost, setShowAdvancedHost] = useState(false);
   const [stage, setStage] = useState<"IDLE" | "SENDING" | "DONE">("IDLE");
   const [connectStatus, setConnectStatus] = useState<string | null>(null);
 
@@ -161,7 +162,7 @@ export const RobotProvisionModal: React.FC = () => {
               <div className="text-sm font-semibold text-zinc-950">Wi-Fi Settings Sent</div>
               <p className="text-xs text-zinc-600">
                 Lobo saved <span className="font-mono font-semibold text-zinc-950">{ssid}</span> and
-                is connecting to <span className="font-mono">{harnessHost}:{harnessPort}</span>.
+                is connecting to that Wi-Fi network.
               </p>
             </div>
             <button
@@ -183,7 +184,7 @@ export const RobotProvisionModal: React.FC = () => {
                 value={ssid}
                 onChange={(e) => setSsid(e.target.value)}
                 required
-                placeholder="Home_WiFi"
+                placeholder="lobo"
                 className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-50 border border-zinc-300 focus:border-zinc-950 text-sm text-zinc-950 outline-none"
               />
             </div>
@@ -195,7 +196,7 @@ export const RobotProvisionModal: React.FC = () => {
                   type={showPass ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter password"
+                  placeholder="Enter password (leave blank for open)"
                   className="w-full px-3.5 py-2.5 pr-10 rounded-xl bg-zinc-50 border border-zinc-300 focus:border-zinc-950 text-sm text-zinc-950 outline-none"
                 />
                 <button
@@ -209,31 +210,42 @@ export const RobotProvisionModal: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2 space-y-1.5">
-                <label className="flex items-center space-x-1 text-xs font-medium text-zinc-700">
-                  <Server className="w-3.5 h-3.5 text-zinc-600" />
-                  <span>Robot / Host Address</span>
-                </label>
-                <input
-                  type="text"
-                  value={harnessHost}
-                  onChange={(e) => setHarnessHost(e.target.value)}
-                  placeholder="petbot.local"
-                  className="w-full px-3 py-2.5 rounded-xl bg-zinc-50 border border-zinc-300 focus:border-zinc-950 text-xs font-mono text-zinc-950 outline-none"
-                />
-              </div>
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowAdvancedHost(!showAdvancedHost)}
+                className="text-[11px] font-medium text-zinc-500 hover:text-zinc-950"
+              >
+                {showAdvancedHost ? "Hide Advanced Host" : "Advanced Desktop/WS Host"}
+              </button>
+              {showAdvancedHost && (
+                <div className="grid grid-cols-3 gap-3 mt-2">
+                  <div className="col-span-2 space-y-1.5">
+                    <label className="flex items-center space-x-1 text-xs font-medium text-zinc-700">
+                      <Server className="w-3.5 h-3.5 text-zinc-600" />
+                      <span>Robot / Host Address</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={harnessHost}
+                      onChange={(e) => setHarnessHost(e.target.value)}
+                      placeholder="petbot.local"
+                      className="w-full px-3 py-2.5 rounded-xl bg-zinc-50 border border-zinc-300 focus:border-zinc-950 text-xs font-mono text-zinc-950 outline-none"
+                    />
+                  </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-700">Port</label>
-                <input
-                  type="number"
-                  value={harnessPort}
-                  onChange={(e) => setHarnessPort(e.target.value)}
-                  placeholder="8443"
-                  className="w-full px-3 py-2.5 rounded-xl bg-zinc-50 border border-zinc-300 focus:border-zinc-950 text-xs font-mono text-zinc-950 outline-none"
-                />
-              </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-700">Port</label>
+                    <input
+                      type="number"
+                      value={harnessPort}
+                      onChange={(e) => setHarnessPort(e.target.value)}
+                      placeholder="8443"
+                      className="w-full px-3 py-2.5 rounded-xl bg-zinc-50 border border-zinc-300 focus:border-zinc-950 text-xs font-mono text-zinc-950 outline-none"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <button
@@ -244,12 +256,12 @@ export const RobotProvisionModal: React.FC = () => {
               {stage === "SENDING" ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Sending Wi-Fi Settings...</span>
+                  <span>Pushing Wi-Fi to Lobo...</span>
                 </>
               ) : (
                 <>
                   <Wifi className="w-4 h-4" />
-                  <span>Save Wi-Fi &amp; Connect</span>
+                  <span>Push New Wi-Fi &amp; Connect</span>
                 </>
               )}
             </button>

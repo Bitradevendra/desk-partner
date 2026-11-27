@@ -127,18 +127,9 @@ export const HardwareAndMobilePanels: React.FC<HardwareAndMobilePanelsProps> = (
                 <Volume2 className="w-3.5 h-3.5" />
                 <span>Speaker Volume</span>
               </span>
-              <span className="font-mono font-semibold text-zinc-950">
-                {hardwareSettings.volumePct}%
-              </span>
+              <span className="font-mono font-semibold text-zinc-950">Max (100%)</span>
             </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={hardwareSettings.volumePct}
-              onChange={(e) => void updateHardwareSettings({ volumePct: Number(e.target.value) })}
-              className="w-full accent-zinc-950 cursor-pointer"
-            />
+            <div className="w-full h-2 rounded-full bg-zinc-950" />
           </div>
 
           <div className="space-y-1.5">

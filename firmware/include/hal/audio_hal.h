@@ -54,8 +54,8 @@ inline constexpr size_t   I2S_DMA_BUF_LEN       = AUDIO_FRAME_SAMPLES; // 320 sa
 // Downlink voice streaming ring buffer capacity in samples (8 seconds @ 16kHz in Octal PSRAM)
 inline constexpr size_t   DOWNLINK_RING_SAMPLES = 128000;
 
-// Voice Activity Detection default RMS threshold
-inline constexpr uint16_t DEFAULT_VAD_THRESHOLD = 650;
+// Voice Activity Detection default AC RMS threshold (after DC removal)
+inline constexpr uint16_t DEFAULT_VAD_THRESHOLD = 1000;
 
 // ============================================================================
 // Procedural Sound Identifiers
@@ -69,6 +69,7 @@ enum class SoundId : uint8_t {
     SleepySigh  = 5,
     Tick        = 6,
     AlarmChime  = 7,
+    AhaVoice    = 8,
 
     // Uppercase Convenience Aliases
     CHIRP        = Chirp,
@@ -77,7 +78,8 @@ enum class SoundId : uint8_t {
     CURIOUS_BEEP = CuriousBeep,
     SLEEPY_SIGH  = SleepySigh,
     TICK         = Tick,
-    ALARM_CHIME  = AlarmChime
+    ALARM_CHIME  = AlarmChime,
+    AHA_VOICE    = AhaVoice
 };
 
 // ============================================================================
@@ -148,6 +150,12 @@ public:
      */
     void setVadThreshold(uint16_t threshold) noexcept { vadThreshold_ = threshold; }
     [[nodiscard]] uint16_t getVadThreshold() const noexcept { return vadThreshold_; }
+    [[nodiscard]] uint16_t getNoiseFloorRms() const noexcept { return static_cast<uint16_t>(noiseFloorRms_); }
+    [[nodiscard]] uint16_t getLastMicRms() const noexcept { return lastMicRms_; }
+    [[nodiscard]] uint32_t getMicFramesOk() const noexcept { return micFramesOk_; }
+    [[nodiscard]] uint32_t getMicFramesFail() const noexcept { return micFramesFail_; }
+    [[nodiscard]] uint32_t getSpkFramesWritten() const noexcept { return spkFramesWritten_; }
+    [[nodiscard]] uint32_t getSpkI2sErrors() const noexcept { return spkI2sErrors_; }
 
     /**
      * Check if a procedural sound or downlink voice stream is currently rendering.
@@ -210,6 +218,16 @@ private:
     uint8_t volumePct_{100};
     bool isMuted_{false};
     uint16_t vadThreshold_{DEFAULT_VAD_THRESHOLD};
+    float noiseFloorRms_{180.0f};
+    uint32_t micWarmupFrames_{0};
+    uint16_t lastMicRms_{0};
+    uint32_t micFramesOk_{0};
+    uint32_t micFramesFail_{0};
+    uint32_t spkFramesWritten_{0};
+    uint32_t spkI2sErrors_{0};
+    int32_t micRawBuffer_[AUDIO_FRAME_SAMPLES]{};
+    int16_t spkMixBuffer_[AUDIO_FRAME_SAMPLES]{};
+    int16_t spkStereoBuffer_[AUDIO_FRAME_SAMPLES * 2]{};
 
     DownlinkRingBuffer downlinkBuffer_{};
 

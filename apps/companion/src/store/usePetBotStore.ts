@@ -392,12 +392,19 @@ export const usePetBotStore = create<PetBotStore>((set, get) => {
         get().geminiApiKey
       );
 
+      const foregroundSwitchAction =
+        turn.action.type === "OPEN_APP" ||
+        turn.action.type === "SEARCH_WEB" ||
+        turn.action.type === "NAVIGATE" ||
+        turn.action.type === "CALL" ||
+        turn.action.type === "ALARM" ||
+        turn.action.type === "TIMER";
+
       let finalReply = turn.spokenReply;
-      if (turn.action.type !== "NONE") {
+      let deferredActionOutcome: { ok: boolean; logTag?: string } | null = null;
+
+      if (turn.action.type !== "NONE" && !foregroundSwitchAction) {
         const actionOutcome = await dispatchGeminiAction(turn.action);
-        if (!actionOutcome.ok && turn.action.type === "OPEN_APP") {
-          finalReply = `Could not find ${String(turn.action.params.appName || "that app")} on this phone.`;
-        }
         if (actionOutcome.logTag) {
           get().addHarnessLog({
             id: `log-hwvoice-${Date.now()}`,
@@ -412,14 +419,48 @@ export const usePetBotStore = create<PetBotStore>((set, get) => {
 
       set({
         lastVoiceTranscript: turn.transcript,
-        lastVoiceStatus: `Lobo: "${finalReply}"`,
+        lastVoiceStatus: turn.modelUsed
+          ? `[${turn.modelUsed}] "${finalReply}"`
+          : `Lobo: "${finalReply}"`,
       });
 
+      // Stream spoken TTS audio to robot BEFORE launching another Android app that backgrounds WebView
       const replyPcm = await synthesizeReplyToPcm16(finalReply);
       await robotConnection.streamAudioResponsePcm(replyPcm, turn.emotion);
+
+      if (foregroundSwitchAction) {
+        deferredActionOutcome = await dispatchGeminiAction(turn.action);
+        if (!deferredActionOutcome.ok && turn.action.type === "OPEN_APP") {
+          const fallbackMsg = `Could not find ${String(turn.action.params.appName || "that app")} on this phone.`;
+          set({ lastVoiceStatus: fallbackMsg });
+          const errPcm = await synthesizeReplyToPcm16(fallbackMsg);
+          await robotConnection.streamAudioResponsePcm(errPcm, EmotionId.CURIOUS);
+        }
+        if (deferredActionOutcome.logTag) {
+          get().addHarnessLog({
+            id: `log-hwvoice-${Date.now()}`,
+            timestamp: Date.now(),
+            title: deferredActionOutcome.logTag,
+            risk: "LOW",
+            status: deferredActionOutcome.ok ? "EXECUTED" : "DENIED",
+            details: turn.transcript,
+          });
+        }
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Voice processing failed";
       set({ lastVoiceStatus: errMsg });
+      if (robotConnection.isConnected()) {
+        try {
+          const shortErr = errMsg.includes("401") || errMsg.includes("403")
+            ? "Please check your Gemini API key in Voice settings."
+            : "Sorry, Gemini could not reach the server.";
+          const errPcm = await synthesizeReplyToPcm16(shortErr);
+          await robotConnection.streamAudioResponsePcm(errPcm, EmotionId.FOCUSED);
+        } catch {
+          // ignore secondary TTS failure
+        }
+      }
     }
   });
 
@@ -1029,7 +1070,7 @@ export const usePetBotStore = create<PetBotStore>((set, get) => {
     setProvisionModalOpen: (open: boolean) => set({ isProvisionModalOpen: open }),
 
     wifiProvisionConfig: {
-      ssid: "Home_5G",
+      ssid: "lobo",
       harnessHost: "petbot.local",
       harnessPort: 8443,
     },
@@ -1172,13 +1213,17 @@ export const usePetBotStore = create<PetBotStore>((set, get) => {
 
       const executedActions: string[] = [];
 
-      // 1. Attempt live Gemini Cloud Gateway Brain first
+      // 1. Attempt local Gateway Brain when available (500ms fast timeout on mobile)
       try {
+        const controller = new AbortController();
+        const timerId = setTimeout(() => controller.abort(), 500);
         const res = await fetch("http://127.0.0.1:8787/api/v1/voice/command", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: clean, persona, statePatch }),
+          signal: controller.signal,
         });
+        clearTimeout(timerId);
 
         if (res.ok) {
           const data = (await res.json()) as {

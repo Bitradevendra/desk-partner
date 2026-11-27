@@ -384,7 +384,7 @@ export const VoiceAndProView: React.FC = () => {
         {showGeminiKey && (
           <div className="pt-2 border-t border-zinc-100 space-y-2">
             <div className="text-[11px] text-zinc-600">
-              Used directly from your phone to understand Lobo&apos;s raw WAV audio and trigger actions.
+              Auto-picks the most available free Gemini model (Flash-Lite / Flash / Hydrogen, with live model discovery).
             </div>
             <div className="flex items-center space-x-2">
               <input

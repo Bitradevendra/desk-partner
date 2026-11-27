@@ -147,12 +147,15 @@ bool VoiceStreamer::startVoiceStream() {
     }
 
     const uint32_t nowMs = millis();
+    m_isThinking = false;
     m_uplinkActive = true;
     m_listenStartMs = nowMs;
     m_lastUplinkMs = nowMs;
     m_lastVoiceActivityMs = nowMs;
     m_hasEnteredSleepState = false;
     m_vadHangoverEndMs = 0;
+    // Ignore the robot's own 386ms "Aha!" WAV + room reverb tail (750ms blanking) so it never self-triggers Thinking!
+    m_echoBlankUntilMs = nowMs + 750;
     m_wasSpeaking = false;
 
     // If currently on a widget page, save it and transition to living pet face
@@ -168,21 +171,29 @@ bool VoiceStreamer::startVoiceStream() {
         }
     }
 
-    // Visual cue: crisp Listening state (no question mark)
+    // Visual & Audio Wake Cue: ensure amp unmuted, play loud "Aha!" voice + attentive Listening eyes
+    petbot::hal::AudioHal::instance().setSpeakerMute(false);
     petbot::firmware::ui::ExpressionEngine::instance().setEmotion(petbot::protocol::EmotionId::Listening);
-    petbot::hal::AudioHal::instance().playProceduralSound(petbot::hal::SoundId::Chirp);
-    petbot::firmware::ui::UIManager::instance().showToast("Listening...", 1800);
+    petbot::hal::AudioHal::instance().playProceduralSound(petbot::hal::SoundId::AhaVoice);
+    petbot::firmware::ui::UIManager::instance().showToast("Aha! Listening...", 1800);
 
-    Serial.println("[VoiceStreamer] Voice stream started (fast PCM16/WAV uplink active).");
+    Serial.println("[VoiceStreamer] Voice stream started ('Aha!' played, fast PCM16/WAV uplink active).");
     return true;
 }
 
 void VoiceStreamer::stopVoiceStream() {
     if (m_uplinkActive) {
+        const uint32_t nowMs = millis();
         m_uplinkActive = false;
-        m_lastVoiceActivityMs = millis();
+        m_wasSpeaking = false;
+        m_isThinking = false;
+        m_lastVoiceActivityMs = nowMs;
+        m_lastWakeTriggerMs = nowMs;
+        m_echoBlankUntilMs = nowMs + 700;
         m_hasEnteredSleepState = false;
+        m_wakeConsecutiveHits = 0;
         petbot::firmware::ui::ExpressionEngine::instance().setVisemeOpenness(0);
+        petbot::firmware::ui::ExpressionEngine::instance().setLiveMicEnergy(0);
         petbot::firmware::ui::ExpressionEngine::instance().setEmotion(petbot::protocol::EmotionId::Idle);
         petbot::hal::AudioHal::instance().playProceduralSound(petbot::hal::SoundId::Tick);
         Serial.println("[VoiceStreamer] Voice stream stopped.");
@@ -229,18 +240,16 @@ bool VoiceStreamer::checkWakeWord(const int16_t* samples, size_t sampleCount) {
     }
 
     const uint32_t nowMs = millis();
-    // 2.5 second refractory period between wake triggers
-    if (nowMs - m_lastWakeTriggerMs < 2500) {
+    // Wait 4s on boot for ambient noise-floor calibration; block during speaker playback / echo tail / cooldown
+    if (nowMs < 4000 || nowMs < m_echoBlankUntilMs || petbot::hal::AudioHal::instance().isPlaying()) {
+        m_wakeConsecutiveHits = 0;
+        return false;
+    }
+    if (nowMs - m_lastWakeTriggerMs < 3500) {
         return false;
     }
 
-#if defined(ESP32) && defined(CONFIG_ESP_SR_WAKENET)
-    // Hardware ESP-SR WakeNet inference pipeline
-    // int res = wns->detect(m_wnModelData, const_cast<int16_t*>(samples));
-    // if (res == WAKENET_DETECTED) { m_lastWakeTriggerMs = nowMs; return true; }
-#endif
-
-    // High-accuracy acoustic envelope & zero-crossing formant detector
+    // DC-removed AC RMS & zero-crossing speech formant check
     uint64_t sumSq = 0;
     int zeroCrossings = 0;
     for (size_t i = 0; i < sampleCount; ++i) {
@@ -253,18 +262,26 @@ bool VoiceStreamer::checkWakeWord(const int16_t* samples, size_t sampleCount) {
 
     const uint16_t frameRms = static_cast<uint16_t>(std::sqrt(sumSq / sampleCount));
     const uint16_t threshold = petbot::hal::AudioHal::instance().getVadThreshold();
+    const uint16_t noiseFloor = petbot::hal::AudioHal::instance().getNoiseFloorRms();
+    const uint16_t minWakeRms = std::max<uint16_t>(
+        threshold,
+        static_cast<uint16_t>(noiseFloor * 3 + 450)
+    );
 
-    // Human speech formant characteristics for "Hi ESP" / "Hey Lobo"
-    if (frameRms >= threshold && zeroCrossings >= 8 && zeroCrossings <= 90) {
+    if (m_wakeConsecutiveHits > 0 && (nowMs - m_wakeWindowStartMs) > 950) {
+        m_wakeConsecutiveHits = 0;
+    }
+
+    // Require clear spoken syllable energy (>= 7 speech frames within 950ms window -> ~140ms+ vocal phrase)
+    if (frameRms >= minWakeRms && zeroCrossings >= 10 && zeroCrossings <= 85) {
+        if (m_wakeConsecutiveHits == 0) {
+            m_wakeWindowStartMs = nowMs;
+        }
         m_wakeConsecutiveHits++;
-        if (m_wakeConsecutiveHits >= 3) {
+        if (m_wakeConsecutiveHits >= 7) {
             m_wakeConsecutiveHits = 0;
             m_lastWakeTriggerMs = nowMs;
             return true;
-        }
-    } else {
-        if (m_wakeConsecutiveHits > 0) {
-            m_wakeConsecutiveHits--;
         }
     }
 
@@ -373,36 +390,49 @@ void VoiceStreamer::handleAudioDownlink(const PetBotFrameHeader& header, const u
         petbot::hal::AudioHal::instance().pushPcmDownlinkFrame(samples, sampleCount);
     }
 
-    m_lastDownlinkPacketMs = millis();
-    m_lastVoiceActivityMs = millis();
+    const uint32_t now = millis();
+    m_isThinking = false;
+    m_lastDownlinkPacketMs = now;
+    m_lastVoiceActivityMs = now;
+    m_echoBlankUntilMs = now + 900;
     m_hasEnteredSleepState = false;
     m_isReceivingDownlink = true;
 }
 
 void VoiceStreamer::update(uint32_t nowMs) {
-    // 0. Handle Built-in ESP32-S3 WakeNet keyword detection when idle
-    if (!m_uplinkActive && !m_isReceivingDownlink && m_wakeWordEnabled) {
-        int16_t samples[UPLINK_FRAME_SAMPLES];
+    m_updateTicks++;
+    // 0. Handle Built-in ESP32-S3 WakeNet keyword detection only when idle & not thinking/echo-blanked
+    if (!m_uplinkActive && !m_isReceivingDownlink && !m_isThinking && m_wakeWordEnabled) {
         uint16_t rmsEnergy = 0;
         bool vadActive = false;
 
         const bool frameReady = petbot::hal::AudioHal::instance().readMicUplinkFrame(
-            samples, rmsEnergy, vadActive
+            m_micSamples, rmsEnergy, vadActive
         );
 
         if (frameReady && vadActive) {
-            if (checkWakeWord(samples, UPLINK_FRAME_SAMPLES)) {
+            if (checkWakeWord(m_micSamples, UPLINK_FRAME_SAMPLES)) {
                 Serial.printf("[VoiceStreamer] Built-in Wake-Word '%s' detected! Starting AI conversation...\n",
                               m_wakeWordPhrase);
                 startVoiceStream();
-                char toastBuf[48];
-                snprintf(toastBuf, sizeof(toastBuf), "Woke: %s", m_wakeWordPhrase);
-                petbot::firmware::ui::UIManager::instance().showToast(toastBuf, 1500);
+                return;
             }
         }
     }
 
-    // 1. Handle Upsell Prompt Auto-dismiss (5 seconds)
+    // 1. Handle Thinking Timeout (never get stuck on Focused face if offline or no reply)
+    if (m_isThinking && !m_isReceivingDownlink && !m_uplinkActive) {
+        if ((nowMs - m_thinkingStartMs) >= 10000) {
+            m_isThinking = false;
+            m_lastWakeTriggerMs = nowMs;
+            m_echoBlankUntilMs = nowMs + 700;
+            petbot::firmware::ui::ExpressionEngine::instance().setEmotion(petbot::protocol::EmotionId::Idle);
+            petbot::firmware::ui::UIManager::instance().showToast("Ready", 1000);
+            Serial.println("[VoiceStreamer] Thinking timeout -> Returned cleanly to Idle.");
+        }
+    }
+
+    // 1b. Handle Upsell Prompt Auto-dismiss (5 seconds)
     if (m_upsellPromptActive) {
         if (nowMs - m_upsellStartTimeMs >= 5000) {
             m_upsellPromptActive = false;
@@ -413,6 +443,8 @@ void VoiceStreamer::update(uint32_t nowMs) {
     if (m_isReceivingDownlink) {
         if ((nowMs - m_lastDownlinkPacketMs >= 450) && !petbot::hal::AudioHal::instance().isPlaying()) {
             m_isReceivingDownlink = false;
+            m_lastWakeTriggerMs = nowMs;
+            m_echoBlankUntilMs = nowMs + 800;
             petbot::firmware::ui::ExpressionEngine::instance().setVisemeOpenness(0);
             petbot::firmware::ui::ExpressionEngine::instance().setEmotion(petbot::protocol::EmotionId::Idle);
         }
@@ -420,49 +452,18 @@ void VoiceStreamer::update(uint32_t nowMs) {
 
     // 3. Handle Fast Microphone Uplink Capture & Immediate End-of-Turn WAV Flush
     if (m_uplinkActive) {
-        int16_t samples[UPLINK_FRAME_SAMPLES];
-        uint16_t rmsEnergy = 0;
-        bool vadActive = false;
-
-        const bool frameReady = petbot::hal::AudioHal::instance().readMicUplinkFrame(
-            samples, rmsEnergy, vadActive
-        );
-
         const uint32_t listenElapsedMs = (nowMs >= m_listenStartMs) ? (nowMs - m_listenStartMs) : 0;
 
-        if (frameReady) {
-            if (vadActive) {
-                m_vadHangoverEndMs = nowMs + 650; // Fast 650ms post-speech end-of-turn
-                m_wasSpeaking = true;
-            }
+        // Hard safety timeouts run even if I2S read drops/stalls
+        if ((m_wasSpeaking && (nowMs >= m_vadHangoverEndMs)) || (m_wasSpeaking && listenElapsedMs >= 5500)) {
+            m_uplinkActive = false;
+            m_wasSpeaking = false;
+            m_lastWakeTriggerMs = nowMs;
+            m_echoBlankUntilMs = nowMs + 700;
+            m_wakeConsecutiveHits = 0;
+            petbot::firmware::ui::ExpressionEngine::instance().setLiveMicEnergy(0);
 
-            const bool shouldTransmit = vadActive || (m_wasSpeaking && nowMs < m_vadHangoverEndMs);
-
-            if (shouldTransmit && listenElapsedMs < 5500) {
-                m_lastVoiceActivityMs = nowMs;
-                m_hasEnteredSleepState = false;
-
-                constexpr size_t PAYLOAD_SIZE = sizeof(AudioUplinkHeader) + UPLINK_FRAME_BYTES;
-                uint8_t frameBuffer[PAYLOAD_SIZE];
-
-                auto* upHdr = reinterpret_cast<AudioUplinkHeader*>(frameBuffer);
-                upHdr->rmsEnergy = rmsEnergy;
-                upHdr->vadActive = 1;
-                upHdr->codec = static_cast<uint8_t>(petbot::protocol::AudioCodec::Pcm16);
-                upHdr->sampleCount = UPLINK_FRAME_SAMPLES;
-
-                memcpy(frameBuffer + sizeof(AudioUplinkHeader), samples, UPLINK_FRAME_BYTES);
-
-                AgenticTransport::instance().sendFrame(
-                    FrameType::AudioUplinkFrame,
-                    frameBuffer,
-                    PAYLOAD_SIZE
-                );
-
-                petbot::firmware::ui::ExpressionEngine::instance().setLiveMicEnergy(rmsEnergy);
-                m_lastUplinkMs = nowMs;
-            } else if ((m_wasSpeaking && (nowMs >= m_vadHangoverEndMs)) || (m_wasSpeaking && listenElapsedMs >= 5500)) {
-                // Utterance finished! Immediately send End-Of-Turn marker so phone runs Gemini at light speed
+            if (AgenticTransport::instance().hasActiveLink()) {
                 AudioUplinkHeader endHdr{};
                 endHdr.rmsEnergy = 0;
                 endHdr.vadActive = 0;
@@ -475,20 +476,73 @@ void VoiceStreamer::update(uint32_t nowMs) {
                     sizeof(AudioUplinkHeader)
                 );
 
-                m_uplinkActive = false;
-                m_wasSpeaking = false;
-                petbot::firmware::ui::ExpressionEngine::instance().setLiveMicEnergy(0);
+                m_isThinking = true;
+                m_thinkingStartMs = nowMs;
                 petbot::firmware::ui::ExpressionEngine::instance().setEmotion(petbot::protocol::EmotionId::Focused);
                 petbot::hal::AudioHal::instance().playProceduralSound(petbot::hal::SoundId::Tick);
                 petbot::firmware::ui::UIManager::instance().showToast("Thinking...", 2500);
                 Serial.println("[VoiceStreamer] Utterance complete -> End-of-turn marker sent to mobile.");
-            } else if (!m_wasSpeaking && listenElapsedMs >= 3200) {
-                // No speech followed wake-word within 3.2s -> cleanly exit listening without hanging
-                m_uplinkActive = false;
-                petbot::firmware::ui::ExpressionEngine::instance().setLiveMicEnergy(0);
+            } else {
                 petbot::firmware::ui::ExpressionEngine::instance().setEmotion(petbot::protocol::EmotionId::Idle);
                 petbot::hal::AudioHal::instance().playProceduralSound(petbot::hal::SoundId::Tick);
-                Serial.println("[VoiceStreamer] Initial silence timeout -> Returning to Idle.");
+                petbot::firmware::ui::UIManager::instance().showToast("Connect phone to reply", 1800);
+                Serial.println("[VoiceStreamer] Utterance complete (offline) -> Returning to Idle.");
+            }
+            return;
+        } else if (!m_wasSpeaking && listenElapsedMs >= 3200) {
+            m_uplinkActive = false;
+            m_lastWakeTriggerMs = nowMs;
+            m_echoBlankUntilMs = nowMs + 700;
+            m_wakeConsecutiveHits = 0;
+            petbot::firmware::ui::ExpressionEngine::instance().setLiveMicEnergy(0);
+            petbot::firmware::ui::ExpressionEngine::instance().setEmotion(petbot::protocol::EmotionId::Idle);
+            petbot::hal::AudioHal::instance().playProceduralSound(petbot::hal::SoundId::Tick);
+            Serial.println("[VoiceStreamer] Initial silence timeout -> Returning to Idle.");
+            return;
+        }
+
+        uint16_t rmsEnergy = 0;
+        bool vadActive = false;
+
+        const bool frameReady = petbot::hal::AudioHal::instance().readMicUplinkFrame(
+            m_micSamples, rmsEnergy, vadActive
+        );
+
+        if (frameReady) {
+            // Skip own speaker "Aha!" echo during initial blanking window
+            if (nowMs < m_echoBlankUntilMs || petbot::hal::AudioHal::instance().isPlaying()) {
+                return;
+            }
+
+            if (vadActive) {
+                m_vadHangoverEndMs = nowMs + 650; // Fast 650ms post-speech end-of-turn
+                m_wasSpeaking = true;
+            }
+
+            const bool shouldTransmit = vadActive || (m_wasSpeaking && nowMs < m_vadHangoverEndMs);
+
+            if (shouldTransmit && listenElapsedMs < 5500) {
+                m_lastVoiceActivityMs = nowMs;
+                m_hasEnteredSleepState = false;
+
+                constexpr size_t PAYLOAD_SIZE = sizeof(AudioUplinkHeader) + UPLINK_FRAME_BYTES;
+
+                auto* upHdr = reinterpret_cast<AudioUplinkHeader*>(m_uplinkTxBuffer);
+                upHdr->rmsEnergy = rmsEnergy;
+                upHdr->vadActive = 1;
+                upHdr->codec = static_cast<uint8_t>(petbot::protocol::AudioCodec::Pcm16);
+                upHdr->sampleCount = UPLINK_FRAME_SAMPLES;
+
+                memcpy(m_uplinkTxBuffer + sizeof(AudioUplinkHeader), m_micSamples, UPLINK_FRAME_BYTES);
+
+                AgenticTransport::instance().sendFrame(
+                    FrameType::AudioUplinkFrame,
+                    m_uplinkTxBuffer,
+                    PAYLOAD_SIZE
+                );
+
+                petbot::firmware::ui::ExpressionEngine::instance().setLiveMicEnergy(rmsEnergy);
+                m_lastUplinkMs = nowMs;
             }
         }
     }

@@ -577,6 +577,31 @@ class PetBotMobileHarnessPlugin : Plugin() {
                         }
                     }
 
+                    if (bestPkg == null) {
+                        val knownPackages = mapOf(
+                            "youtube" to "com.google.android.youtube",
+                            "whatsapp" to "com.whatsapp",
+                            "chrome" to "com.android.chrome",
+                            "instagram" to "com.instagram.android",
+                            "spotify" to "com.spotify.music",
+                            "maps" to "com.google.android.apps.maps",
+                            "googlemaps" to "com.google.android.apps.maps",
+                            "gmail" to "com.google.android.gm",
+                            "photos" to "com.google.android.apps.photos",
+                            "gallery" to "com.google.android.apps.photos",
+                            "calculator" to "com.google.android.calculator",
+                            "clock" to "com.google.android.deskclock",
+                            "calendar" to "com.google.android.calendar",
+                            "messages" to "com.google.android.apps.messaging",
+                            "playstore" to "com.android.vending"
+                        )
+                        val aliasPkg = knownPackages[normalizedQuery]
+                        if (aliasPkg != null && pm.getLaunchIntentForPackage(aliasPkg) != null) {
+                            bestPkg = aliasPkg
+                            bestLabel = requested
+                        }
+                    }
+
                     if (bestPkg != null) {
                         val launchIntent = pm.getLaunchIntentForPackage(bestPkg)?.apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -861,7 +886,7 @@ class PetBotMobileHarnessPlugin : Plugin() {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     synchronized(bleLock) { activeGatt = gatt }
                     val mtuOk = try {
-                        gatt.requestMtu(256)
+                        gatt.requestMtu(512)
                     } catch (_: Throwable) {
                         false
                     }
@@ -876,7 +901,7 @@ class PetBotMobileHarnessPlugin : Plugin() {
 
             override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
                 if (status == BluetoothGatt.GATT_SUCCESS && mtu > 23) {
-                    currentMtuPayloadBytes = (mtu - 3).coerceIn(20, 244)
+                    currentMtuPayloadBytes = (mtu - 3).coerceIn(20, 505)
                 }
                 mainHandler.post { gatt.discoverServices() }
             }
@@ -886,6 +911,11 @@ class PetBotMobileHarnessPlugin : Plugin() {
                     cleanupBleConnection(false)
                     resolvePendingConnect(false, "Service discovery failed ($status)")
                     return
+                }
+
+                try {
+                    gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                } catch (_: Throwable) {
                 }
 
                 val service = gatt.getService(PETBOT_SERVICE_UUID)
@@ -1032,6 +1062,7 @@ class PetBotMobileHarnessPlugin : Plugin() {
     @PluginMethod
     fun writeBleRx(call: PluginCall) {
         val b64 = call.getString("base64") ?: ""
+        val noResponse = call.getBoolean("noResponse") ?: false
         if (b64.isEmpty()) {
             call.resolve(JSObject().put("success", false))
             return
@@ -1051,12 +1082,18 @@ class PetBotMobileHarnessPlugin : Plugin() {
             synchronized(bleLock) {
                 gatt = activeGatt
                 rxChar = activeRxChar
-                chunkCap = currentMtuPayloadBytes.coerceIn(20, 244)
+                chunkCap = currentMtuPayloadBytes.coerceIn(20, 505)
             }
 
             if (gatt == null || rxChar == null) {
                 call.resolve(JSObject().put("success", false))
                 return@execute
+            }
+
+            val writeType = if (noResponse) {
+                BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            } else {
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             }
 
             var offset = 0
@@ -1068,11 +1105,11 @@ class PetBotMobileHarnessPlugin : Plugin() {
                 lastWriteOk = false
 
                 val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    gatt.writeCharacteristic(rxChar, slice, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
+                    gatt.writeCharacteristic(rxChar, slice, writeType) == BluetoothStatusCodes.SUCCESS
                 } else {
                     @Suppress("DEPRECATION")
                     rxChar.value = slice
-                    rxChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    rxChar.writeType = writeType
                     @Suppress("DEPRECATION")
                     gatt.writeCharacteristic(rxChar)
                 }
@@ -1082,10 +1119,16 @@ class PetBotMobileHarnessPlugin : Plugin() {
                     return@execute
                 }
 
-                val awaited = latch.await(2500, TimeUnit.MILLISECONDS)
-                if (!awaited || !lastWriteOk) {
+                val awaited = latch.await(if (noResponse) 250L else 2500L, TimeUnit.MILLISECONDS)
+                if ((!noResponse && (!awaited || !lastWriteOk))) {
                     call.resolve(JSObject().put("success", false))
                     return@execute
+                }
+                if (noResponse) {
+                    try {
+                        Thread.sleep(2)
+                    } catch (_: InterruptedException) {
+                    }
                 }
 
                 offset = end

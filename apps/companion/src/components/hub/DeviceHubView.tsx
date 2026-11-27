@@ -550,6 +550,30 @@ export const DeviceHubView: React.FC = () => {
 
           <section className="p-4 rounded-2xl bg-white border border-zinc-200 flex items-center justify-between gap-3">
             <div className="flex items-center space-x-3">
+              <Wifi className="w-4 h-4 text-zinc-800 shrink-0" />
+              <div>
+                <div className="text-xs font-semibold text-zinc-950">Wi-Fi Network</div>
+                <p className="text-[11px] text-zinc-500">
+                  Push new Wi-Fi credentials to Lobo over Bluetooth
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                webAudioSynth.play("TICK");
+                setProvisionModalOpen(true);
+              }}
+              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-zinc-950 hover:bg-zinc-800 text-xs font-semibold text-white shrink-0"
+            >
+              <Wifi className="w-3.5 h-3.5" />
+              <span>Set Wi-Fi</span>
+            </button>
+          </section>
+
+          <section className="p-4 rounded-2xl bg-white border border-zinc-200 flex items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
               <Cpu className="w-4 h-4 text-zinc-800 shrink-0" />
               <div>
                 <div className="flex items-center space-x-2">

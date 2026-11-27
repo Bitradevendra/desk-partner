@@ -25,6 +25,25 @@ export interface GeminiVoiceTurnResponse {
   emotion: EmotionId;
   action: GeminiVoiceAction;
   usedGemini: boolean;
+  modelUsed?: string;
+}
+
+export const FREE_TIER_MODEL_PRIORITY = [
+  "gemini-3.5-flash-lite",
+  "gemini-2.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-4-hydrogen",
+  "gemini-2.5-flash",
+] as const;
+
+let cachedWorkingModel: string | null = null;
+
+export function getActiveGeminiModel(): string {
+  return cachedWorkingModel ?? FREE_TIER_MODEL_PRIORITY[0];
+}
+
+export function resetGeminiModelCacheForTest(): void {
+  cachedWorkingModel = null;
 }
 
 const GEMINI_KEY_STORAGE = "lobo_gemini_api_key";
@@ -201,47 +220,140 @@ function buildSystemInstruction(ctx: GeminiContextSnapshot): string {
   ].join("\n");
 }
 
+function rankDiscoveredModel(modelId: string): number {
+  const m = modelId.toLowerCase();
+  if (
+    !m.startsWith("gemini-") ||
+    m.includes("embedding") ||
+    m.includes("imagen") ||
+    m.includes("veo") ||
+    m.includes("lyria") ||
+    m.includes("tts") ||
+    m.includes("live") ||
+    m.includes("robotics") ||
+    m.includes("decision") ||
+    m.includes("deep-research") ||
+    m.includes("vision")
+  ) {
+    return 9999;
+  }
+  if (m.includes("flash-lite")) return 10;
+  if (m.includes("hydrogen")) return 20;
+  if (m.includes("flash")) return 30;
+  if (m.includes("lite")) return 40;
+  if (m.includes("pro")) return 80;
+  return 60;
+}
+
+async function discoverAvailableFreeModels(apiKey: string): Promise<string[]> {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}&pageSize=100`
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>;
+    };
+    const candidates = (data.models ?? [])
+      .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+      .map((m) => (m.name ?? "").replace(/^models\//, ""))
+      .filter((id) => rankDiscoveredModel(id) < 9000)
+      .sort((a, b) => rankDiscoveredModel(a) - rankDiscoveredModel(b));
+    return candidates;
+  } catch {
+    return [];
+  }
+}
+
+async function tryGeminiModel(
+  apiKey: string,
+  model: string,
+  parts: Array<Record<string, unknown>>,
+  ctx: GeminiContextSnapshot
+): Promise<{ ok: true; text: string } | { ok: false; status: number; fatalAuth: boolean }> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: buildSystemInstruction(ctx) }] },
+      contents: [{ role: "user", parts }],
+      generationConfig: {
+        temperature: 0.25,
+        maxOutputTokens: 512,
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+
+  if (response.ok) {
+    const json = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+    if (text.trim()) {
+      return { ok: true, text };
+    }
+  }
+
+  return {
+    ok: false,
+    status: response.status,
+    fatalAuth: response.status === 401 || response.status === 403,
+  };
+}
+
 async function callGeminiGenerateContent(
   apiKey: string,
   parts: Array<Record<string, unknown>>,
   ctx: GeminiContextSnapshot
-): Promise<string> {
-  const models = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
-  let lastError: Error | null = null;
+): Promise<{ text: string; modelUsed: string }> {
+  const tried = new Set<string>();
+  const initialCandidates = cachedWorkingModel
+    ? [cachedWorkingModel, ...FREE_TIER_MODEL_PRIORITY]
+    : [...FREE_TIER_MODEL_PRIORITY];
 
-  for (const model of models) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: buildSystemInstruction(ctx) }] },
-        contents: [{ role: "user", parts }],
-        generationConfig: {
-          temperature: 0.25,
-          maxOutputTokens: 240,
-          responseMimeType: "application/json",
-        },
-      }),
-    });
+  let lastStatus = 0;
+  let lastModel = initialCandidates[0] ?? "gemini-3.5-flash-lite";
 
-    if (response.ok) {
-      const json = (await response.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
-      const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-      if (text.trim()) {
-        return text;
-      }
+  for (const model of initialCandidates) {
+    if (tried.has(model)) continue;
+    tried.add(model);
+    lastModel = model;
+
+    const attempt = await tryGeminiModel(apiKey, model, parts, ctx);
+    if (attempt.ok) {
+      cachedWorkingModel = model;
+      return { text: attempt.text, modelUsed: model };
     }
-
-    lastError = new Error(`Gemini ${model} failed (${response.status})`);
-    if (response.status === 400 || response.status === 401 || response.status === 403) {
-      throw lastError;
+    lastStatus = attempt.status;
+    if (cachedWorkingModel === model) {
+      cachedWorkingModel = null;
+    }
+    if (attempt.fatalAuth) {
+      throw new Error(`Invalid Gemini API key (${attempt.status})`);
     }
   }
 
-  throw lastError ?? new Error("Gemini API unreachable");
+  // Self-heal if Google rotated free-tier model IDs: query live /v1beta/models list
+  const discovered = await discoverAvailableFreeModels(apiKey);
+  for (const model of discovered) {
+    if (tried.has(model)) continue;
+    tried.add(model);
+    lastModel = model;
+
+    const attempt = await tryGeminiModel(apiKey, model, parts, ctx);
+    if (attempt.ok) {
+      cachedWorkingModel = model;
+      return { text: attempt.text, modelUsed: model };
+    }
+    lastStatus = attempt.status;
+    if (attempt.fatalAuth) {
+      throw new Error(`Invalid Gemini API key (${attempt.status})`);
+    }
+  }
+
+  throw new Error(`No available free Gemini model responded (${lastModel}: HTTP ${lastStatus || "ERR"})`);
 }
 
 export async function processVoiceWavWithGemini(
@@ -259,7 +371,7 @@ export async function processVoiceWavWithGemini(
     };
   }
 
-  const rawText = await callGeminiGenerateContent(
+  const { text: rawText, modelUsed } = await callGeminiGenerateContent(
     apiKey,
     [
       {
@@ -276,6 +388,7 @@ export async function processVoiceWavWithGemini(
   return {
     ...parseGeminiJsonPayload(rawText),
     usedGemini: true,
+    modelUsed,
   };
 }
 
@@ -286,10 +399,15 @@ export async function processTextWithGemini(
 ): Promise<GeminiVoiceTurnResponse | null> {
   if (!apiKey) return null;
 
-  const rawText = await callGeminiGenerateContent(apiKey, [{ text: userText }], ctx);
+  const { text: rawText, modelUsed } = await callGeminiGenerateContent(
+    apiKey,
+    [{ text: userText }],
+    ctx
+  );
   return {
     ...parseGeminiJsonPayload(rawText, userText),
     usedGemini: true,
+    modelUsed,
   };
 }
 

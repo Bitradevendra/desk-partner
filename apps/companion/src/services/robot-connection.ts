@@ -329,7 +329,7 @@ export class RobotConnectionManager {
         this.nativeBlePlugin = nativePlugin;
         this.nativeBleMtuPayloadBytes =
           typeof res.mtuPayloadBytes === "number"
-            ? Math.max(20, Math.min(BLE_MTU_SAFE_BYTES, res.mtuPayloadBytes))
+            ? Math.max(20, Math.min(505, res.mtuPayloadBytes))
             : 240;
         this.setState("BLE_FOUND");
         await this.performHandshakeAndUpgrade();
@@ -809,7 +809,7 @@ export class RobotConnectionManager {
   ): Promise<boolean> {
     if (pcm16Bytes.byteLength === 0) return false;
     const alignedLen = pcm16Bytes.byteLength - (pcm16Bytes.byteLength % 2);
-    const packetBytes = 1600; // 50ms @ 16kHz PCM16 for fast transfer
+    const packetBytes = 3200; // 100ms @ 16kHz PCM16 for fast low-overhead BLE/WS transfer
     let allSent = true;
 
     for (let offset = 0; offset < alignedLen; offset += packetBytes) {
@@ -839,7 +839,8 @@ export class RobotConnectionManager {
       const ok = await this.sendRawFrame(
         FrameType.AUDIO_DOWNLINK_FRAME,
         downlink,
-        FLAG_PRIORITY_REALTIME
+        FLAG_PRIORITY_REALTIME,
+        true
       );
       if (!ok) {
         allSent = false;
@@ -995,7 +996,12 @@ export class RobotConnectionManager {
 
   // --- Low-level Raw Frame Dispatch ---
 
-  public async sendRawFrame(frameType: FrameType, payload: Uint8Array, flags = 0): Promise<boolean> {
+  public async sendRawFrame(
+    frameType: FrameType,
+    payload: Uint8Array,
+    flags = 0,
+    withoutResponse = false
+  ): Promise<boolean> {
     const seq = ++this.sequenceCounter & 0xffff;
     const frame = encodeFrame(frameType, payload, seq, flags);
 
@@ -1019,7 +1025,10 @@ export class RobotConnectionManager {
             for (let j = 0; j < slice.length; j++) {
               bin += String.fromCharCode(slice[j]!);
             }
-            const res = await this.nativeBlePlugin.writeBleRx({ base64: btoa(bin) });
+            const res = await this.nativeBlePlugin.writeBleRx({
+              base64: btoa(bin),
+              noResponse: withoutResponse,
+            });
             if (!res?.success) return false;
           }
           return true;

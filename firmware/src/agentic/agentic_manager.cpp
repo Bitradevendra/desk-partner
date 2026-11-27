@@ -322,9 +322,15 @@ void AgenticManager::handleHarnessRpcReq(const uint8_t* payload, size_t len) {
 #ifdef ESP32
         Preferences provPrefs;
         if (provPrefs.begin("petbot_prov", false)) {
-            if (std::strlen(ssid) > 0) provPrefs.putString("ssid", ssid);
-            if (std::strlen(pass) > 0) provPrefs.putString("password", pass);
-            if (std::strlen(host) > 0) provPrefs.putString("host", host);
+            if (std::strlen(ssid) > 0) {
+                provPrefs.putString("ssid", ssid);
+                provPrefs.putString("password", pass);
+            }
+            if (std::strlen(host) > 0 && std::strcmp(host, "petbot.local") != 0) {
+                provPrefs.putString("host", host);
+            } else {
+                provPrefs.remove("host");
+            }
             if (port > 0) provPrefs.putUShort("port", port);
             provPrefs.end();
         }
@@ -332,11 +338,11 @@ void AgenticManager::handleHarnessRpcReq(const uint8_t* payload, size_t len) {
         if (std::strlen(ssid) > 0) {
             AgenticTransport::instance().connectWifi(ssid, pass);
         }
-        if (std::strlen(host) > 0) {
+        if (std::strlen(host) > 0 && std::strcmp(host, "petbot.local") != 0) {
             AgenticTransport::instance().connectOutbound(host, port, "/ws");
         }
         hal::AudioHal::instance().playProceduralSound(hal::SoundId::HappyTrill);
-        ui::UIManager::instance().showToast("Wi-Fi Provisioned!", 2000);
+        ui::UIManager::instance().showToast("Wi-Fi Updating!", 2000);
         Serial.printf("[AgenticManager] Applied robot.provisionWifi RPC (SSID: %s).\n", ssid);
         return;
     }
